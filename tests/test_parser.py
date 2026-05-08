@@ -186,6 +186,32 @@ def test_company_sales_alone_no_payment():
     assert any("No payment method" in f for f in p.review_flags)
 
 
+def test_company_sale_singular_typo_detected():
+    """Real-world typo: 'COMPANY SALE' (singular). Engine should still
+    recognise this as the house account."""
+    p = parse_seller_note(
+        "COMPANY SALE WALK IN\nVISA CREDIT 4255 RM200\nVISA CREDIT 4255 RM400",
+        order_total=600.0,
+    )
+    assert _names(p) == [(HOUSE_ACCOUNT, 1.0)]
+
+
+def test_company_sales_transposition_typo_detected():
+    p = parse_seller_note(
+        "COMPNAY SALES WALK IN\nMASTERCARD 1234", order_total=500.0
+    )
+    assert _names(p) == [(HOUSE_ACCOUNT, 1.0)]
+
+
+def test_company_policy_does_not_false_match_house():
+    """Defensive: 'COMPANY POLICY' must NOT trip the fuzzy house detector."""
+    p = parse_seller_note(
+        "EILEEN\nWHATSAPP\nCOMPANY POLICY DISCOUNT\nCASH RM500",
+        order_total=500.0,
+    )
+    assert _names(p) == [("EILEEN", 1.0)]
+
+
 def test_decimal_amount():
     p = parse_seller_note(
         "EILEEN\nTIKTOK PAYMENT RM3189.42", order_total=3189.42, channel="tiktok-shop"

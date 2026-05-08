@@ -172,8 +172,17 @@ def _detect_single_sa(note: str, sa_pool: list[str]) -> SAShare | None:
     if "COMPANY SALES" in upper:
         return SAShare(name=HOUSE_ACCOUNT, share=1.0)
 
-    # Check the first 3 lines for an SA token (SA name is conventionally first)
     lines = [ln.strip() for ln in upper.split("\n") if ln.strip()]
+
+    # Fuzzy match for the house account — catches common typos like
+    # "COMPANY SALE" (missing S), "COMPNAY SALES" (transposition), and
+    # "COMP SALES" (abbreviation). Only check the first 3 lines so we
+    # don't accidentally match on something buried in a payment line.
+    for line in lines[:3]:
+        if fuzz.partial_ratio("COMPANY SALES", line) >= SA_FUZZY_THRESHOLD:
+            return SAShare(name=HOUSE_ACCOUNT, share=1.0)
+
+    # Check the first 3 lines for an SA token (SA name is conventionally first)
     for line in lines[:3]:
         for raw_token in re.split(r"[\s,/&\-]+", line):
             token = raw_token.strip().strip(":.;-")
