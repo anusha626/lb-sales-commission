@@ -106,13 +106,64 @@ Your colleagues never need any of these. They only need the URL + password.
 
 ## Important: things to know
 
-1. **The free Streamlit Cloud disk is ephemeral.** If you or a colleague edits rate %, tier %, or SAs from the **Settings page in the live app**, those edits will be **lost on the next redeploy** (which happens whenever you push, or when the app sleeps and wakes). For settings that need to stick, edit the JSON file on your Mac and `git push`. (For your monthly use this is fine — you'll edit rates ~yearly.)
+1. **Apps sleep after ~7 days of no traffic.** First visitor after sleep waits ~30 seconds for it to wake. After that it's instant.
 
-2. **Apps sleep after ~7 days of no traffic.** First visitor after sleep waits ~30 seconds for it to wake. After that it's instant.
+2. **The CSV your colleagues upload only lives in their browser session.** Closing the tab clears it. No sales data is stored anywhere on the server.
 
-3. **The CSV your colleagues upload only lives in their browser session.** Closing the tab clears it. No sales data is stored anywhere on the server.
+3. **Always test in incognito** after a deploy to confirm the password gate is active. If you ever see the app without being asked for a password, the secret didn't get set — go back to the Streamlit Cloud Secrets manager and check the value.
 
-4. **Always test in incognito** after a deploy to confirm the password gate is active. If you ever see the app without being asked for a password, the secret didn't get set — go back to the Streamlit Cloud Secrets manager and check the value.
+## Persistent Settings (one-time setup, recommended)
+
+Streamlit Cloud's free tier has an **ephemeral disk** — every time the app
+restarts (after a code push, ~7 days idle, or random container rebalance) the
+disk is reset to the GitHub version. Without this setup, anything you edit
+from the **Settings** page in the live app — adding an SA, updating a card
+rate, changing a tier — gets wiped when the app restarts.
+
+The fix: give the app permission to write changes back to GitHub itself.
+After this 2-minute setup, every Save click on the Settings page commits the
+change to the repo and the app auto-redeploys with the new value.
+
+### Step 1 — Create a fine-grained Personal Access Token
+
+1. Open **https://github.com/settings/personal-access-tokens/new**
+2. **Token name:** `lb-commission-settings-write`
+3. **Expiration:** 1 year (or "No expiration" if you don't want to rotate)
+4. **Resource owner:** your account
+5. **Repository access:** select **Only select repositories** → tick `lb-sales-commission`
+6. **Repository permissions** → scroll to **Contents** → set to **Read and write**
+   - leave everything else as default ("No access")
+7. Click **Generate token**
+8. **Copy the token immediately** — it starts with `github_pat_…` and won't be shown again
+
+### Step 2 — Add the token to Streamlit Cloud secrets
+
+1. Open your app on **https://share.streamlit.io**
+2. Click your app → top-right kebab menu → **Settings**
+3. Open the **Secrets** tab
+4. Add three lines (paste below the existing `app_password = "…"`):
+   ```
+   github_pat = "github_pat_paste_your_token_here"
+   github_repo = "anusha626/lb-sales-commission"
+   github_branch = "main"
+   ```
+5. Click **Save**
+6. The app will reboot automatically (~30 seconds)
+
+### Step 3 — Test it
+
+1. Open the live app, sign in
+2. Go to **Settings** → **Sales Advisors**
+3. Add a test SA, click **Save SA list**
+4. You should see "Sales Advisor list saved & synced to GitHub. App will redeploy with the new settings in ~1 minute."
+5. Check **https://github.com/anusha626/lb-sales-commission/commits/main** — there will be a new commit "Settings update: Sales Advisor list"
+
+If you see "GitHub sync not configured" instead, the secrets weren't picked up — try saving them again on Streamlit Cloud's Secrets tab.
+
+### Token security
+
+- The token only has write access to **this one repo** — it cannot read your other private repos, post issues, or anything else. (That's the point of fine-grained tokens.)
+- If the token ever leaks, revoke it at https://github.com/settings/personal-access-tokens — the app will fall back to local-only saves until you rotate.
 
 ## If something goes wrong
 

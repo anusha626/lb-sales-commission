@@ -14,9 +14,12 @@ from datetime import date, datetime, timedelta
 import pandas as pd
 import streamlit as st
 
+from pathlib import Path
+
 from commission.aggregator import build_order_results, read_easystore_csv
 from commission.commission_engine import compute_commissions
 from commission.excel_export import build_workbook
+from commission.github_sync import GitHubConfig, push_local_path
 from commission.models import (
     ParsedNote,
     PaymentMethod,
@@ -28,14 +31,19 @@ from commission.settings import (
     AppSettings,
     ChannelFlatRule,
     CommissionTier,
+    RATES_FILE,
     RateRow,
     RateTableVersion,
     SARecord,
+    SA_FILE,
+    TIERS_FILE,
     load_all,
     save_rates,
     save_sa_list,
     save_tiers,
 )
+
+PROJECT_ROOT = Path(__file__).parent
 
 st.set_page_config(
     page_title="LB Commission Calculator",
@@ -57,6 +65,47 @@ def _password_required() -> bool:
         return bool(st.secrets.get("app_password", ""))
     except Exception:
         return False
+
+
+def _github_config() -> GitHubConfig:
+    """Read GitHub-sync credentials from Streamlit secrets, if present."""
+    try:
+        return GitHubConfig(
+            pat=str(st.secrets.get("github_pat", "")),
+            repo=str(st.secrets.get("github_repo", "")),
+            branch=str(st.secrets.get("github_branch", "main")),
+        )
+    except Exception:
+        return GitHubConfig(pat="", repo="")
+
+
+def _save_and_sync(local_path: Path, what_changed: str) -> None:
+    """Render Save feedback. If GitHub creds are configured, also push the
+    local JSON to the repo so the change survives container restarts on
+    Streamlit Cloud's ephemeral disk."""
+    cfg = _github_config()
+    if not cfg.configured:
+        st.success(f"{what_changed} saved locally.")
+        st.warning(
+            "⚠ This change **won't survive an app restart** on Streamlit Cloud's "
+            "free tier. To make settings permanent, an admin must add a GitHub "
+            "Personal Access Token to Streamlit Secrets — see DEPLOY.md → "
+            "*Persistent Settings*."
+        )
+        return
+    with st.spinner("Syncing to GitHub…"):
+        result = push_local_path(
+            cfg, local_path, PROJECT_ROOT, f"Settings update: {what_changed}"
+        )
+    if result.ok:
+        st.success(
+            f"{what_changed} saved & synced to GitHub. "
+            "App will redeploy with the new settings in ~1 minute."
+        )
+    else:
+        st.error(
+            f"{what_changed} saved locally, but GitHub sync failed: {result.message}"
+        )
 
 
 def _check_password() -> bool:
@@ -555,7 +604,7 @@ def page_settings() -> None:
             settings.sa_list.sas = new_sas
             save_sa_list(settings.sa_list)
             _reload_settings()
-            st.success("Saved.")
+            _save_and_sync(SA_FILE, "Sales Advisor list")
 
     # ---- Rates -------------------------------------------------------------
     with rate_tab:
@@ -634,7 +683,7 @@ def page_settings() -> None:
                 )
                 save_rates(settings.rates)
                 _reload_settings()
-                st.success("Saved.")
+                _save_and_sync(RATES_FILE, "Card rate table")
         with c_new:
             if st.button("Add new version (copy of current)"):
                 copy = version.model_copy(deep=True)
@@ -642,7 +691,7 @@ def page_settings() -> None:
                 settings.rates.versions.append(copy)
                 save_rates(settings.rates)
                 _reload_settings()
-                st.success("New version added — switch to it via the dropdown.")
+                _save_and_sync(RATES_FILE, "New rate version added")
                 st.rerun()
 
     # ---- Tiers + channel flat rules ---------------------------------------
@@ -718,7 +767,7 @@ def page_settings() -> None:
             settings.tiers.channel_flat_commissions = new_flat
             save_tiers(settings.tiers)
             _reload_settings()
-            st.success("Saved.")
+            _save_and_sync(TIERS_FILE, "Tiers and channel flat rules")
 
 
 # ---------------------------------------------------------------------------
