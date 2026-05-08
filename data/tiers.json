@@ -1,0 +1,10 @@
+{
+  "tiers": [
+    {"min_net": 0.0,        "max_net": 199999.99, "rate_pct": 0.80},
+    {"min_net": 200000.0,   "max_net": 349999.99, "rate_pct": 1.00},
+    {"min_net": 350000.0,   "max_net": null,      "rate_pct": 1.20}
+  ],
+  "channel_flat_commissions": [
+    {"channel": "tiktok-shop", "amount_per_order": 10.00, "label": "TikTok flat RM10/order"}
+  ]
+}
