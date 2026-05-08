@@ -94,6 +94,41 @@ def fmt_money(v: float | None) -> str:
     return f"RM {v:,.2f}"
 
 
+def _format_payment_summary(order) -> str:
+    """Compact one-cell summary of all payment portions on an order."""
+    if not order or not order.parsed.payments:
+        return ""
+    parts: list[str] = []
+    for p in order.parsed.payments:
+        s = p.method.value
+        if p.last4:
+            s += f" *{p.last4}"
+        parts.append(s)
+    return ", ".join(parts)
+
+
+def _contribution_row(contribution, order) -> dict:
+    """One row in the per-SA / house breakdown table.
+
+    The SA's slice of the order's bank charges = order total charges × share.
+    """
+    if order is not None:
+        charges_share = round(order.total_charges * contribution.share_pct, 2)
+    else:
+        # Fall back to gross - net so the row stays consistent if the
+        # underlying OrderResult somehow can't be looked up.
+        charges_share = round(contribution.gross_share - contribution.net_share, 2)
+    return {
+        "Order #": contribution.order_number,
+        "Date": contribution.order_date.strftime("%Y-%m-%d"),
+        "Share %": f"{contribution.share_pct * 100:.0f}%",
+        "Gross share": contribution.gross_share,
+        "Charges": charges_share,
+        "Net share": contribution.net_share,
+        "Payment method": _format_payment_summary(order),
+    }
+
+
 def previous_month_range(today: date) -> tuple[date, date]:
     first_this_month = today.replace(day=1)
     last_prev_month = first_this_month - timedelta(days=1)
@@ -409,6 +444,10 @@ def page_report() -> None:
         ).set_index("SA")
         st.bar_chart(chart_df)
 
+        # Build a lookup so the per-SA breakdowns can show each order's
+        # charges and payment-method summary.
+        orders_by_num = {o.order_number: o for o in orders}
+
         st.subheader("Per-SA summary")
         for s in summaries:
             with st.container(border=True):
@@ -423,13 +462,7 @@ def page_report() -> None:
 
                 with st.expander("Order-by-order breakdown"):
                     rows = [
-                        {
-                            "Order #": c.order_number,
-                            "Date": c.order_date.strftime("%Y-%m-%d"),
-                            "Share %": f"{c.share_pct*100:.0f}%",
-                            "Gross share": c.gross_share,
-                            "Net share": c.net_share,
-                        }
+                        _contribution_row(c, orders_by_num.get(c.order_number))
                         for c in s.contributions
                     ]
                     if rows:
@@ -439,6 +472,7 @@ def page_report() -> None:
                             use_container_width=True,
                             column_config={
                                 "Gross share": st.column_config.NumberColumn(format="RM %.2f"),
+                                "Charges": st.column_config.NumberColumn(format="RM %.2f"),
                                 "Net share": st.column_config.NumberColumn(format="RM %.2f"),
                             },
                         )
@@ -454,14 +488,9 @@ def page_report() -> None:
         h2.metric("Gross", fmt_money(house.total_gross_sales))
         h3.metric("Net", fmt_money(house.total_net_sales))
         with st.expander("Order-by-order breakdown"):
+            orders_by_num = {o.order_number: o for o in orders}
             rows = [
-                {
-                    "Order #": c.order_number,
-                    "Date": c.order_date.strftime("%Y-%m-%d"),
-                    "Share %": f"{c.share_pct*100:.0f}%",
-                    "Gross share": c.gross_share,
-                    "Net share": c.net_share,
-                }
+                _contribution_row(c, orders_by_num.get(c.order_number))
                 for c in house.contributions
             ]
             if rows:
@@ -471,6 +500,7 @@ def page_report() -> None:
                     use_container_width=True,
                     column_config={
                         "Gross share": st.column_config.NumberColumn(format="RM %.2f"),
+                        "Charges": st.column_config.NumberColumn(format="RM %.2f"),
                         "Net share": st.column_config.NumberColumn(format="RM %.2f"),
                     },
                 )
