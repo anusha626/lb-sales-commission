@@ -35,6 +35,14 @@
     {
       "name": "SARAH",
       "active": true
+    },
+    {
+      "name": "ERONNE",
+      "active": false
+    },
+    {
+      "name": "FRANKIE",
+      "active": false
     }
   ]
 }
