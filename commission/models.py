@@ -117,7 +117,24 @@ class OrderResult(BaseModel):
 
     @property
     def needs_review(self) -> bool:
-        return self.parsed.needs_review and not self.excluded
+        """Whether this order should appear in the human Review queue.
+
+        House-only orders (100% COMPANY SALES) earn zero commission no matter
+        how their payment method is parsed, so we treat their parser flags as
+        non-actionable noise — surfacing them just adds clicks for the user.
+        Mixed orders (real SA + house) still surface, since their parsing
+        affects the real SA's commission.
+        """
+        if self.excluded or not self.parsed.needs_review:
+            return False
+        # Empty SA list means parsing couldn't attribute the order — keep
+        # in review so the user can assign one.
+        if not self.parsed.sa_shares:
+            return True
+        # All shares are the house account → no commission impact → skip.
+        if all(s.name == "COMPANY SALES" for s in self.parsed.sa_shares):
+            return False
+        return True
 
 
 class SAContribution(BaseModel):

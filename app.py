@@ -182,7 +182,7 @@ def page_upload() -> None:
         return
 
     parsed_orders = [o for o in orders if not o.excluded]
-    review_orders = [o for o in parsed_orders if o.parsed.needs_review]
+    review_orders = [o for o in parsed_orders if o.needs_review]
     excluded_orders = [o for o in orders if o.excluded]
 
     m1, m2, m3, m4 = st.columns(4)

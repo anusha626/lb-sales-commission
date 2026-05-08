@@ -105,6 +105,44 @@ def test_no_house_sales_means_house_is_none():
     assert report.house is None
 
 
+def test_house_only_orders_with_flags_do_not_show_in_review():
+    """A 100% COMPANY SALES order with parser flags shouldn't appear in
+    review — its commission is RM 0 regardless of how the flag is resolved."""
+    o = _make_order(
+        order_number="#H1",
+        sa_shares=[(HOUSE_ACCOUNT, 1.0)],
+        gross=2990.0,
+    )
+    o.parsed.review_flags.append("SenangPay portion lacks card/FPX detail")
+    assert o.parsed.needs_review is True  # flag is on the parsed note
+    assert o.needs_review is False  # but order isn't actionable for review
+
+
+def test_mixed_house_and_real_sa_still_shows_in_review():
+    """If a real SA has a stake in the order, parser flags still matter."""
+    o = _make_order(
+        order_number="#M1",
+        sa_shares=[("MINKEI", 0.5), (HOUSE_ACCOUNT, 0.5)],
+        gross=1000.0,
+    )
+    o.parsed.review_flags.append("SenangPay portion lacks card/FPX detail")
+    assert o.needs_review is True
+
+
+def test_no_sa_detected_still_shows_in_review():
+    """When the parser couldn't attribute an order at all, the user must
+    assign an SA — keep it in review even though no real SA is on it yet."""
+    o = _make_order(
+        order_number="#N1",
+        sa_shares=[("MINKEI", 1.0)],  # placeholder
+        gross=500.0,
+    )
+    # Simulate parser not finding anyone
+    o.parsed.sa_shares.clear()
+    o.parsed.review_flags.append("No SA detected")
+    assert o.needs_review is True
+
+
 def test_tier_bracket_whole_not_progressive():
     """SA with RM 250,000 net should get RM 2,500 (1.0% × 250k), not a blend."""
     orders = [

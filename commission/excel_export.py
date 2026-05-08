@@ -178,7 +178,7 @@ def _build_sa_sheet(
 
 def _build_review_sheet(ws: Worksheet, orders: list[OrderResult]) -> None:
     ws.title = "Review log"
-    review = [o for o in orders if not o.excluded and o.parsed.needs_review]
+    review = [o for o in orders if o.needs_review]
     headers = ["Order #", "Date", "Gross", "Channel", "Note", "Flags"]
     _write_header(ws, headers)
     for i, o in enumerate(review, start=2):
