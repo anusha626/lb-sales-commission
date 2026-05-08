@@ -675,23 +675,69 @@ def page_settings() -> None:
                             rate_pct=rate_pct,
                         )
                     )
-                settings.rates.versions[active_idx] = RateTableVersion(
-                    effective_from=new_eff,
-                    senangpay_card_pct=new_card,
-                    senangpay_fpx_pct=new_fpx,
-                    rates=new_rows,
-                )
-                save_rates(settings.rates)
-                _reload_settings()
-                _save_and_sync(RATES_FILE, "Card rate table")
+                # Reject duplicate dates so we don't silently create another
+                # 2026-05-08 vs 2026-05-08 ambiguity when the user is editing.
+                others = [
+                    v.effective_from
+                    for i, v in enumerate(settings.rates.versions)
+                    if i != active_idx
+                ]
+                if new_eff in others:
+                    st.error(
+                        f"A version dated {new_eff} already exists. "
+                        "Pick a different effective-from date or delete the duplicate first."
+                    )
+                else:
+                    settings.rates.versions[active_idx] = RateTableVersion(
+                        effective_from=new_eff,
+                        senangpay_card_pct=new_card,
+                        senangpay_fpx_pct=new_fpx,
+                        rates=new_rows,
+                    )
+                    save_rates(settings.rates)
+                    _reload_settings()
+                    _save_and_sync(RATES_FILE, "Card rate table")
         with c_new:
+            new_ver_date = st.date_input(
+                "Effective from (for the new version)",
+                value=date.today(),
+                key=f"new_ver_date_{active_idx}",
+            )
             if st.button("Add new version (copy of current)"):
-                copy = version.model_copy(deep=True)
-                copy.effective_from = date.today()
-                settings.rates.versions.append(copy)
+                if any(v.effective_from == new_ver_date for v in settings.rates.versions):
+                    st.error(
+                        f"A version dated {new_ver_date} already exists. "
+                        "Pick a different date."
+                    )
+                else:
+                    copy = version.model_copy(deep=True)
+                    copy.effective_from = new_ver_date
+                    settings.rates.versions.append(copy)
+                    save_rates(settings.rates)
+                    _reload_settings()
+                    _save_and_sync(
+                        RATES_FILE, f"Added rate version {new_ver_date.isoformat()}"
+                    )
+                    st.rerun()
+
+        # Delete button — only when there's more than one version, so the
+        # user can never accidentally end up with zero rate versions.
+        if len(settings.rates.versions) > 1:
+            st.divider()
+            del_col1, del_col2 = st.columns([3, 1])
+            confirm_del = del_col1.checkbox(
+                f"Confirm: I want to permanently delete the "
+                f"**{version.effective_from.isoformat()}** version",
+                key=f"del_confirm_{active_idx}",
+            )
+            if del_col2.button("Delete version", disabled=not confirm_del, type="secondary"):
+                gone = settings.rates.versions.pop(active_idx)
                 save_rates(settings.rates)
                 _reload_settings()
-                _save_and_sync(RATES_FILE, "New rate version added")
+                _save_and_sync(
+                    RATES_FILE,
+                    f"Deleted rate version {gone.effective_from.isoformat()}",
+                )
                 st.rerun()
 
     # ---- Tiers + channel flat rules ---------------------------------------
