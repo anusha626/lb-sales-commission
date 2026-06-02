@@ -156,6 +156,25 @@ def _format_payment_summary(order) -> str:
     return ", ".join(parts)
 
 
+_LOCATION_RE = __import__("re").compile(r"\b(PJ|PG|KL)\b")
+
+
+def _detect_locations(note: str) -> str:
+    """Pull store-location tokens out of the seller note.
+
+    Sellers conventionally tag the sale with the physical store:
+      - "WALKIN PJ"    -> Petaling Jaya walk-in
+      - "MBB 9238 PG"  -> bank transfer routed to the Penang store account
+      - "MBB 0150 KL"  -> Kuala Lumpur store account
+    We collect every distinct PG/PJ/KL token in the note. Returns "" when
+    nothing matches (e.g. online orders).
+    """
+    if not note:
+        return ""
+    found = sorted({m.group(1) for m in _LOCATION_RE.finditer(note.upper())})
+    return " + ".join(found)
+
+
 def _contribution_row(contribution, order) -> dict:
     """One row in the per-SA / house breakdown table.
 
@@ -175,6 +194,7 @@ def _contribution_row(contribution, order) -> dict:
         "Charges": charges_share,
         "Net share": contribution.net_share,
         "Payment method": _format_payment_summary(order),
+        "Location": _detect_locations(order.parsed.raw_note) if order else "",
     }
 
 
