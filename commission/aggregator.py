@@ -35,6 +35,15 @@ REQUIRED_COLS = (
     "Order Status",
     "Financial Status",
 )
+TAG_COL = "Tag"
+
+
+def _parse_tags(s: str) -> list[str]:
+    """EasyStore exports tags as a comma-separated string in the Tag column.
+    Normalise to a list of stripped, upper-cased tokens."""
+    if not s:
+        return []
+    return [t.strip().upper() for t in s.split(",") if t.strip()]
 
 
 def read_easystore_csv(source: str | IO[str] | bytes) -> pd.DataFrame:
@@ -131,6 +140,7 @@ def build_order_results(
         channel = row.get("Channel", "") or ""
         order_status = row.get("Order Status", "") or ""
         financial_status = row.get("Financial Status", "") or ""
+        tags = _parse_tags(row.get(TAG_COL, "") or "")
 
         excluded_reason = _excluded_reason(
             order_status, financial_status, include_unpaid
@@ -156,6 +166,7 @@ def build_order_results(
                     order_status=order_status,
                     gross_total=gross,
                     parsed=parsed,
+                    tags=tags,
                     charges=[],
                     total_charges=0.0,
                     net_total=0.0,
@@ -182,6 +193,7 @@ def build_order_results(
                 order_status=order_status,
                 gross_total=gross,
                 parsed=parsed,
+                tags=tags,
                 charges=charge_lines,
                 total_charges=total_charges,
                 net_total=net_total,

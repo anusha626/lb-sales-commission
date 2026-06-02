@@ -109,6 +109,7 @@ class OrderResult(BaseModel):
     order_status: str
     gross_total: float
     parsed: ParsedNote
+    tags: list[str] = Field(default_factory=list)
     charges: list[ChargeLine] = Field(default_factory=list)
     total_charges: float = 0.0
     net_total: float = 0.0

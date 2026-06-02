@@ -157,18 +157,25 @@ def _format_payment_summary(order) -> str:
 
 
 _LOCATION_RE = __import__("re").compile(r"\b(PJ|PG|KL)\b")
+_LOCATION_TAGS = {"PJ", "PG", "KL"}
 
 
-def _detect_locations(note: str) -> str:
-    """Pull store-location tokens out of the seller note.
+def _detect_locations(order) -> str:
+    """Surface the store location for an order.
 
-    Sellers conventionally tag the sale with the physical store:
-      - "WALKIN PJ"    -> Petaling Jaya walk-in
-      - "MBB 9238 PG"  -> bank transfer routed to the Penang store account
-      - "MBB 0150 KL"  -> Kuala Lumpur store account
-    We collect every distinct PG/PJ/KL token in the note. Returns "" when
-    nothing matches (e.g. online orders).
+    Preferred source: EasyStore's Tag column (structured data, set by the
+    seller via the tags chip UI — much more reliable than free-text). Falls
+    back to a regex on the seller note for older orders that aren't tagged
+    yet. Returns "" if neither yields a match (typical for online orders).
     """
+    if order is None:
+        return ""
+    # 1. Tags (most reliable)
+    from_tags = sorted({t for t in order.tags if t in _LOCATION_TAGS})
+    if from_tags:
+        return " + ".join(from_tags)
+    # 2. Note fallback
+    note = order.parsed.raw_note
     if not note:
         return ""
     found = sorted({m.group(1) for m in _LOCATION_RE.finditer(note.upper())})
@@ -194,7 +201,7 @@ def _contribution_row(contribution, order) -> dict:
         "Charges": charges_share,
         "Net share": contribution.net_share,
         "Payment method": _format_payment_summary(order),
-        "Location": _detect_locations(order.parsed.raw_note) if order else "",
+        "Location": _detect_locations(order),
     }
 
 
