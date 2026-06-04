@@ -179,11 +179,13 @@ def build_order_results(
         charge_lines, total_charges, net_total = calculate_charges(
             parsed.payments, settings.rates, order_date.date()
         )
-        # User rule: orders with zero net are noise (test orders, unparseable
-        # notes that produced no payment portions, etc.) — drop them entirely
-        # so they don't appear in any tab or count toward any total.
-        if round(net_total, 2) == 0.0:
-            continue
+        # User rule (refined): every order must appear in one of the three
+        # tabs — Parsed, Review or Excluded — even if the parser couldn't
+        # compute a net for it. Silently dropping orders breaks the user's
+        # trust in the totals ("did the report miss anything?"). Orders that
+        # couldn't be parsed surface in Review via the flags the parser
+        # already set ("No payment method detected", etc.) and the Net
+        # column reads RM 0 until the user fixes the data.
         out.append(
             OrderResult(
                 order_number=order_number,

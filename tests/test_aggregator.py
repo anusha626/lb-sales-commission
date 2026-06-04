@@ -27,9 +27,11 @@ def _row(**overrides) -> dict:
     return base
 
 
-def test_zero_net_orders_dropped_entirely():
-    """Orders with net_total == 0 (typically empty notes or RM 2 test orders)
-    must not appear in the results — neither active nor excluded."""
+def test_no_orders_silently_dropped():
+    """Every order must end up SOMEWHERE — in Parsed, Review queue, or
+    Excluded — even if the parser couldn't extract a payment portion. The
+    user explicitly asked for this so total counts always match the source
+    CSV. Parse-failed orders surface in the Review queue via their flags."""
     settings = load_all()
     df = _df(
         [
@@ -45,10 +47,18 @@ def test_zero_net_orders_dropped_entirely():
         ]
     )
     orders = build_order_results(df, settings)
-    nums = [o.order_number for o in orders]
-    assert "#REAL" in nums
-    assert "#TEST_2" not in nums  # empty note → no payment → net=0 → dropped
-    assert "#NO_PAY" not in nums  # SA detected but no payment → net=0 → dropped
+    nums = {o.order_number for o in orders}
+    assert nums == {"#REAL", "#TEST_2", "#NO_PAY"}
+
+    by_num = {o.order_number: o for o in orders}
+    # The parse-failed orders are not excluded — they need user attention,
+    # so they land in the Review queue via needs_review=True.
+    assert by_num["#NO_PAY"].excluded is False
+    assert by_num["#NO_PAY"].needs_review is True
+    assert by_num["#TEST_2"].excluded is False
+    assert by_num["#TEST_2"].needs_review is True
+    # The clean order is not in review.
+    assert by_num["#REAL"].needs_review is False
 
 
 def test_excluded_orders_still_shown():
