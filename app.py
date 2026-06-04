@@ -160,6 +160,65 @@ _LOCATION_RE = __import__("re").compile(r"\b(PJ|PG|KL)\b")
 _LOCATION_TAGS = {"PJ", "PG", "KL"}
 
 
+def _render_reconciliation(
+    *,
+    df: pd.DataFrame,
+    date_from: date,
+    date_to: date,
+    in_range_count: int,
+    parsed_clean_count: int,
+    review_count: int,
+    excluded_count: int,
+) -> None:
+    """Render an integrity panel: shows the user that every order in the
+    uploaded CSV is accounted for — either in-range (and then in one of
+    parsed / review / excluded) or out-of-range (filtered by the date
+    picker)."""
+    total_rows = len(df)
+    if "Order Number" in df.columns:
+        unique_orders = df["Order Number"].nunique()
+    else:
+        unique_orders = total_rows
+    out_of_range = unique_orders - in_range_count
+    sum_check = parsed_clean_count + review_count + excluded_count
+    range_ok = sum_check == in_range_count
+    total_ok = (in_range_count + out_of_range) == unique_orders
+
+    badge = "✅ all orders accounted for" if (range_ok and total_ok) else "⚠️ count mismatch — please check"
+    with st.expander(f"Order count reconciliation — {badge}", expanded=not (range_ok and total_ok)):
+        rows = [
+            ("CSV rows uploaded", total_rows, ""),
+            ("Unique orders in CSV", unique_orders, "after collapsing split-payment rows"),
+            (
+                "Outside date range",
+                out_of_range,
+                f"order date not between {date_from} and {date_to}",
+            ),
+            ("In date range", in_range_count, "appears below in one of the three tabs"),
+            ("  → Parsed cleanly", parsed_clean_count, ""),
+            ("  → Needs review", review_count, ""),
+            ("  → Excluded (cancelled / unpaid)", excluded_count, ""),
+            (
+                "  Sum check",
+                sum_check,
+                "✅ matches in-range" if range_ok else "⚠️ does NOT match in-range",
+            ),
+        ]
+        st.dataframe(
+            pd.DataFrame(rows, columns=["What", "Count", "Note"]),
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Count": st.column_config.NumberColumn(format="%d"),
+            },
+        )
+        if not range_ok:
+            st.error(
+                f"Parsed + Review + Excluded = {sum_check}, but Orders in range = {in_range_count}. "
+                "Something is being lost in the pipeline — please report."
+            )
+
+
 def _detect_locations(order) -> str:
     """Surface the store location for an order.
 
@@ -301,6 +360,18 @@ def page_upload() -> None:
     m2.metric("Parsed cleanly", len(parsed_orders) - len(review_orders))
     m3.metric("Need review", len(review_orders))
     m4.metric("Excluded", len(excluded_orders))
+
+    # Integrity check: show the user how every CSV order is accounted for so
+    # they can audit without doing the arithmetic in their head.
+    _render_reconciliation(
+        df=df,
+        date_from=date_from,
+        date_to=date_to,
+        in_range_count=len(orders),
+        parsed_clean_count=len(parsed_orders) - len(review_orders),
+        review_count=len(review_orders),
+        excluded_count=len(excluded_orders),
+    )
 
     tab_parsed, tab_review, tab_excl = st.tabs(
         ["Parsed orders", f"Review queue ({len(review_orders)})", f"Excluded ({len(excluded_orders)})"]
