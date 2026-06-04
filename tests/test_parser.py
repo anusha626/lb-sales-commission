@@ -271,3 +271,25 @@ def test_last4_not_confused_with_rm_amount():
         "CHLOE WALK IN\nMASTERCARD 5403 RM4590", order_total=4590.0
     )
     assert p.payments[0].last4 == "5403"
+
+
+def test_master_shorthand_detected_as_mastercard():
+    """Real-world abbreviation: 'MASTER' in place of 'MASTERCARD'.
+    Single-line note with no newlines must still parse cleanly."""
+    p = parse_seller_note(
+        "MINKEI WALK IN PJ MASTER 3680 RM4690", order_total=4690.0
+    )
+    assert _names(p) == [("MINKEI", 1.0)]
+    assert _methods(p) == [PaymentMethod.MASTERCARD_CREDIT]
+    assert p.payments[0].last4 == "3680"
+    assert p.payments[0].amount == 4690.0
+
+
+def test_full_mastercard_still_preferred_over_master_shorthand():
+    """When both 'MASTERCARD' and 'MASTER' substrings are present (i.e. a
+    normal MASTERCARD note), the longer keyword wins."""
+    p = parse_seller_note(
+        "CHLOE WALK IN\nMASTERCARD 5403 RM4590", order_total=4590.0
+    )
+    assert _methods(p) == [PaymentMethod.MASTERCARD_CREDIT]
+    assert p.payments[0].last4 == "5403"

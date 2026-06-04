@@ -60,6 +60,10 @@ _KEYWORDS: tuple[_Keyword, ...] = (
     _Keyword("SENANG PAY", PaymentMethod.SENANGPAY_CARD),
     _Keyword("SENANGPAY", PaymentMethod.SENANGPAY_CARD),
     _Keyword("MASTERCARD", PaymentMethod.MASTERCARD_CREDIT),
+    # Common seller-shorthand for MASTERCARD. The longest-match keyword
+    # search already prefers "MASTERCARD" when both are present, so this
+    # only fires on notes like "MINKEI WALK IN PJ MASTER 3680 RM4690".
+    _Keyword("MASTER", PaymentMethod.MASTERCARD_CREDIT),
     _Keyword("MYDEBIT", PaymentMethod.MYDEBIT),
     _Keyword("MAESTRO", PaymentMethod.MAESTRO),
     _Keyword("AMEX", PaymentMethod.AMEX),
