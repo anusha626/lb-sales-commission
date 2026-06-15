@@ -569,8 +569,12 @@ def _effective_settlement_date(
     date, else None when neither exists."""
     if o.order_number in overrides:
         return overrides[o.order_number]
-    if o.settlement_date is not None:
-        return o.settlement_date.date()
+    # getattr guard: an order built by a pre-settlement_date build of the code
+    # and left in st.session_state across a redeploy won't carry the field, and
+    # plain attribute access would raise AttributeError. Treat it as undated.
+    settlement = getattr(o, "settlement_date", None)
+    if settlement is not None:
+        return settlement.date()
     return None
 
 
@@ -642,6 +646,16 @@ def page_report() -> None:
     settings: AppSettings = st.session_state["settings"]
     if not orders:
         st.info("Upload a CSV on the **Upload & Review** page first.")
+        return
+
+    # Orders loaded before an app update won't carry settlement_date; force a
+    # clean reload rather than silently dumping them all into manual entry.
+    if not hasattr(orders[0], "settlement_date"):
+        st.warning(
+            "The app was updated since these orders were loaded. Please re-open "
+            "**Upload & Review** (re-upload the CSV) to refresh the data, then "
+            "come back here."
+        )
         return
 
     # ---- Attribute orders to a payout month by *settlement* date -----------
