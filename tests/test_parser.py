@@ -121,6 +121,25 @@ def test_split_70_30():
     assert p.payments[0].last4 == "1104"
 
 
+def test_amount_split_divides_by_total():
+    # Each SA is followed by their own sales amount (no percentages). Shares
+    # are amount / sum(amounts): CHLOE 1350/6400, MINKEI 5050/6400.
+    p = parse_seller_note(
+        "CHLOE RM1350 MINKEI RM5050 WALKIN PJ MASTER 4599 RM6400",
+        order_total=6400.0,
+    )
+    assert _names(p) == [("CHLOE", round(1350 / 6400, 4)), ("MINKEI", round(5050 / 6400, 4))]
+    # The payment is the MASTERCARD line, not mistaken for an SA amount.
+    assert p.payments[0].method == PaymentMethod.MASTERCARD_CREDIT
+    assert p.payments[0].last4 == "4599"
+
+
+def test_single_sa_with_amount_stays_100pct():
+    # One SA with an amount next to it is NOT an amount-split — still 100%.
+    p = parse_seller_note("MINKEI WALK IN PJ MASTER 3680 RM4690", order_total=4690.0)
+    assert _names(p) == [("MINKEI", 1.0)]
+
+
 # ---------------------------------------------------------------------------
 # Channel-aware behaviour
 # ---------------------------------------------------------------------------

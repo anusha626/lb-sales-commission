@@ -82,6 +82,21 @@ _SPLIT_RE = re.compile(
     r"([A-Z][A-Z]+)\s*(\d{1,3})\s*%",
     re.IGNORECASE,
 )
+# Amount-split notation: each SA followed by their sales amount in RM, e.g.
+# "CHLOE RM1350 MINKEI RM5050". Each SA's share is amount / sum(amounts).
+_AMOUNT_SHARE_RE = re.compile(
+    r"([A-Z][A-Z]+)\s*RM\s?([\d,]+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+# Tokens that may sit before an "RM<amount>" but are never an SA name —
+# payment methods, channels and location words. Fuzzy matching rejects most,
+# but these are listed explicitly as a cheap guard.
+_NON_SA_TOKENS = {
+    "WALK", "WALKIN", "WHATSAPP", "CHATDADDY", "TIKTOK", "TIKTOKPAY",
+    "ONLINE", "STORE", "CASH", "MASTER", "MASTERCARD", "VISA", "AMEX",
+    "JCB", "UPI", "TNG", "MYDEBIT", "MAESTRO", "FPX", "MBB", "MAYBANK",
+    "SENANGPAY", "TRADE", "DEPOSIT", "BALANCE", "TOTAL", "PJ", "KL",
+}
 
 
 def _find_keyword(line: str) -> tuple[_Keyword, int, int] | None:
@@ -168,6 +183,55 @@ def _detect_split_shares(
         return None
     candidates.sort(key=lambda x: x[2])
     return [SAShare(name=name, share=pct) for name, pct, _ in candidates]
+
+
+def _detect_amount_shares(
+    note: str, sa_pool: list[str]
+) -> list[SAShare] | None:
+    """Detect amount-based splits like 'CHLOE RM1350 MINKEI RM5050', where each
+    SA is followed by their own sales amount instead of a percentage.
+
+    Each SA's share is amount / (sum of all detected SA amounts), so e.g. CHLOE
+    gets 1350/6400 and MINKEI gets 5050/6400. Returns None unless at least two
+    distinct SAs each carry an amount (a single SA is handled elsewhere as
+    100%, regardless of any amount written next to it).
+    """
+    candidates: list[tuple[str, float, int]] = []  # (name, amount, position)
+    seen: set[str] = set()
+    for m in _AMOUNT_SHARE_RE.finditer(note):
+        token = m.group(1).upper()
+        if token in _NON_SA_TOKENS:
+            continue
+        try:
+            amount = float(m.group(2).replace(",", ""))
+        except ValueError:
+            continue
+        if amount <= 0:
+            continue
+        match = process.extractOne(
+            token, sa_pool + [HOUSE_ACCOUNT], scorer=fuzz.ratio
+        )
+        if match is None:
+            continue
+        canonical, score, _ = match
+        if score < SA_FUZZY_THRESHOLD:
+            continue
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        candidates.append((canonical, amount, m.start()))
+
+    if len(candidates) < 2:
+        return None
+
+    total = sum(amt for _, amt, _ in candidates)
+    if total <= 0:
+        return None
+    candidates.sort(key=lambda x: x[2])
+    return [
+        SAShare(name=name, share=round(amt / total, 6))
+        for name, amt, _ in candidates
+    ]
 
 
 def _detect_single_sa(note: str, sa_pool: list[str]) -> SAShare | None:
@@ -258,8 +322,9 @@ def parse_seller_note(
     # ---- SA shares --------------------------------------------------------
     sa_shares: list[SAShare] = []
     split = _detect_split_shares(upper_note, sa_pool)
-    if split:
-        sa_shares = split
+    amount_split = split or _detect_amount_shares(upper_note, sa_pool)
+    if amount_split:
+        sa_shares = amount_split
     else:
         single = _detect_single_sa(upper_note, sa_pool)
         if single:
