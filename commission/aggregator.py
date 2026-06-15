@@ -59,11 +59,28 @@ def read_easystore_csv(source: str | IO[str] | bytes) -> pd.DataFrame:
     return df
 
 
+def _settlement_date_for_group(group: pd.DataFrame) -> str:
+    """The order's settlement date = the latest *successful* transaction date.
+
+    EasyStore writes one row per payment; a split-paid order is fully settled
+    when its final successful transaction clears. Returns the raw date string
+    (max over successful rows), or "" when the export has no transaction date
+    for this order (e.g. a manually-marked-paid bank transfer).
+    """
+    if "Transaction status" not in group.columns or "Transaction date" not in group.columns:
+        return ""
+    succ = group[group["Transaction status"].str.strip().str.lower() == "success"]
+    dates = [d for d in succ["Transaction date"].astype(str) if d.strip()]
+    return max(dates) if dates else ""
+
+
 def _aggregate_rows(df: pd.DataFrame) -> list[dict]:
     """Collapse a multi-row order export to one record per Order Number.
 
     EasyStore writes split-payment / multi-line orders as several rows; only
     the first carries metadata (Note, Order Status, Financial Status, Total).
+    The per-transaction rows still carry the data we use to derive the
+    settlement date, so we fold that across the whole group.
     """
     out: list[dict] = []
     for order_number, group in df.groupby("Order Number", sort=False):
@@ -75,7 +92,9 @@ def _aggregate_rows(df: pd.DataFrame) -> list[dict]:
             ),
             group.iloc[0],
         )
-        out.append(head.to_dict())
+        rec = head.to_dict()
+        rec["__settlement_date__"] = _settlement_date_for_group(group)
+        out.append(rec)
     return out
 
 
@@ -136,6 +155,13 @@ def build_order_results(
         if date_to and order_date.date() > date_to:
             continue
 
+        settlement_raw = (row.get("__settlement_date__") or "").strip()
+        settlement_date: datetime | None = (
+            _parse_date(settlement_raw) if settlement_raw else None
+        )
+        if settlement_date == datetime.min:
+            settlement_date = None
+
         gross = _parse_total(row["Total Amount"])
         channel = row.get("Channel", "") or ""
         order_status = row.get("Order Status", "") or ""
@@ -161,6 +187,7 @@ def build_order_results(
                 OrderResult(
                     order_number=order_number,
                     order_date=order_date,
+                    settlement_date=settlement_date,
                     channel=channel,
                     financial_status=financial_status,
                     order_status=order_status,
@@ -190,6 +217,7 @@ def build_order_results(
             OrderResult(
                 order_number=order_number,
                 order_date=order_date,
+                settlement_date=settlement_date,
                 channel=channel,
                 financial_status=financial_status,
                 order_status=order_status,

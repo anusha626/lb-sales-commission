@@ -104,6 +104,11 @@ class OrderResult(BaseModel):
 
     order_number: str
     order_date: datetime
+    # When the order was fully settled — date of the last successful
+    # transaction. None when the export carries no transaction date (e.g.
+    # manually-marked-paid bank transfers); such orders are flagged so the
+    # user can set the settlement date by hand on the report page.
+    settlement_date: datetime | None = None
     channel: str
     financial_status: str
     order_status: str

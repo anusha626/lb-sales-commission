@@ -21,6 +21,7 @@ from commission.commission_engine import compute_commissions
 from commission.excel_export import build_workbook
 from commission.github_sync import GitHubConfig, push_local_path
 from commission.models import (
+    OrderResult,
     ParsedNote,
     PaymentMethod,
     PaymentPortion,
@@ -276,6 +277,9 @@ def _ensure_state() -> None:
     st.session_state.setdefault("df", None)
     st.session_state.setdefault("orders", None)
     st.session_state.setdefault("overrides", {})  # order_number -> ParsedNote
+    # order_number -> date the payment cleared, entered by hand for paid
+    # orders whose export carries no transaction date.
+    st.session_state.setdefault("settlement_overrides", {})
 
 
 def _reload_settings() -> None:
@@ -331,6 +335,8 @@ def page_upload() -> None:
     if st.session_state["df"] is None:
         st.info("Drop a CSV above to get started.")
         return
+
+    df = st.session_state["df"]
 
     today = date.today()
     default_from, default_to = previous_month_range(today)
@@ -549,6 +555,86 @@ def _review_editor(
 # Page 2: Commission Report
 # ---------------------------------------------------------------------------
 
+_MONTH_ABBR = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+]
+
+
+def _effective_settlement_date(
+    o: OrderResult, overrides: dict[str, date]
+) -> date | None:
+    """Date used to place an order in a payout month: a manual override if the
+    user entered one, else the export's settlement (last-successful-transaction)
+    date, else None when neither exists."""
+    if o.order_number in overrides:
+        return overrides[o.order_number]
+    if o.settlement_date is not None:
+        return o.settlement_date.date()
+    return None
+
+
+def _month_key(d: date) -> str:
+    return f"{d.year:04d}-{d.month:02d}"
+
+
+def _month_label(key: str) -> str:
+    year, month = key.split("-")
+    return f"{_MONTH_ABBR[int(month) - 1]} {year}"
+
+
+def _render_settlement_entry(
+    awaiting: list[OrderResult], overrides: dict[str, date]
+) -> None:
+    """Let the user hand-enter the date payment cleared for paid orders the
+    export couldn't date (e.g. manual bank transfers). Until a date is set,
+    these orders are held out of every month's totals."""
+    with st.expander(
+        f"⚠️ {len(awaiting)} paid order(s) need a settlement date", expanded=False
+    ):
+        st.caption(
+            "These orders are marked **Paid** but the export carries no "
+            "transaction date, so they can't be placed in a payout month "
+            "automatically. Enter the date each payment actually cleared, then "
+            "**Save**. Until saved, they are excluded from every month's totals "
+            "(so nothing is silently counted in the wrong month)."
+        )
+        editor = pd.DataFrame(
+            [
+                {
+                    "Order #": o.order_number,
+                    "Order date": o.order_date.date(),
+                    "Gross": o.gross_total,
+                    "Settled on": overrides.get(o.order_number),
+                }
+                for o in awaiting
+            ]
+        )
+        edited = st.data_editor(
+            editor,
+            hide_index=True,
+            use_container_width=True,
+            disabled=["Order #", "Order date", "Gross"],
+            column_config={
+                "Gross": st.column_config.NumberColumn(format="RM %.2f"),
+                "Settled on": st.column_config.DateColumn(
+                    "Settled on", help="Date the payment cleared"
+                ),
+            },
+            key="settlement_editor",
+        )
+        if st.button("Save settlement dates"):
+            saved = 0
+            for _, r in edited.iterrows():
+                val = r["Settled on"]
+                if pd.notna(val):
+                    d = val.date() if hasattr(val, "date") else val
+                    overrides[r["Order #"]] = d
+                    saved += 1
+            st.success(f"Saved {saved} settlement date(s).")
+            st.rerun()
+
+
 def page_report() -> None:
     st.title("Commission Report")
 
@@ -558,7 +644,50 @@ def page_report() -> None:
         st.info("Upload a CSV on the **Upload & Review** page first.")
         return
 
-    report = compute_commissions(orders, settings.tiers)
+    # ---- Attribute orders to a payout month by *settlement* date -----------
+    # Commission for a month is earned on orders whose payment fully cleared
+    # that month — so an April order settled in May counts toward May. Orders
+    # are grouped by settlement month (date of the last successful
+    # transaction). Paid orders the export couldn't date wait in a manual-entry
+    # panel until the user supplies the date the money cleared.
+    settle_overrides: dict[str, date] = st.session_state["settlement_overrides"]
+    kept = [o for o in orders if not o.excluded]
+    by_month: dict[str, list[OrderResult]] = {}
+    awaiting: list[OrderResult] = []
+    for o in kept:
+        sd = _effective_settlement_date(o, settle_overrides)
+        if sd is None:
+            awaiting.append(o)
+        else:
+            by_month.setdefault(_month_key(sd), []).append(o)
+
+    if not by_month and not awaiting:
+        st.warning("No kept orders to report.")
+        return
+
+    month_keys = sorted(by_month.keys(), reverse=True)
+    st.caption(
+        "Orders are grouped by the month their payment **fully settled** "
+        "(date of the last successful transaction), not the order date — so an "
+        "order placed in April but settled in May counts toward May."
+    )
+
+    if month_keys:
+        sel_month = st.selectbox(
+            "Payout month", options=month_keys, format_func=_month_label
+        )
+        month_orders = by_month[sel_month]
+    else:
+        sel_month = None
+        month_orders = []
+        st.warning(
+            "Every paid order is still awaiting a settlement date (below)."
+        )
+
+    if awaiting:
+        _render_settlement_entry(awaiting, settle_overrides)
+
+    report = compute_commissions(month_orders, settings.tiers)
     summaries = report.sa_summaries
     house = report.house
 
@@ -653,11 +782,12 @@ def page_report() -> None:
                 )
 
     st.divider()
-    xlsx = build_workbook(orders, report, settings)
+    xlsx = build_workbook(month_orders, report, settings)
+    month_tag = sel_month or datetime.now().strftime("%Y%m")
     st.download_button(
         "Download Excel Report",
         data=xlsx,
-        file_name=f"commission_report_{datetime.now():%Y%m%d_%H%M%S}.xlsx",
+        file_name=f"commission_report_{month_tag}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
