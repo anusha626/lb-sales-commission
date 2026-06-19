@@ -109,6 +109,9 @@ class OrderResult(BaseModel):
     # manually-marked-paid bank transfers); such orders are flagged so the
     # user can set the settlement date by hand on the report page.
     settlement_date: datetime | None = None
+    # Clearance-stock order (seller note carried the clearance tag) — earns a
+    # flat commission and is left out of the tier-determining monthly net.
+    is_clearance: bool = False
     channel: str
     financial_status: str
     order_status: str

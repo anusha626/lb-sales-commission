@@ -162,6 +162,8 @@ def build_order_results(
         if settlement_date == datetime.min:
             settlement_date = None
 
+        is_clearance = settings.tiers.is_clearance_note(row["Note"] or "")
+
         gross = _parse_total(row["Total Amount"])
         channel = row.get("Channel", "") or ""
         order_status = row.get("Order Status", "") or ""
@@ -188,6 +190,7 @@ def build_order_results(
                     order_number=order_number,
                     order_date=order_date,
                     settlement_date=settlement_date,
+                    is_clearance=is_clearance,
                     channel=channel,
                     financial_status=financial_status,
                     order_status=order_status,
@@ -218,6 +221,7 @@ def build_order_results(
                 order_number=order_number,
                 order_date=order_date,
                 settlement_date=settlement_date,
+                is_clearance=is_clearance,
                 channel=channel,
                 financial_status=financial_status,
                 order_status=order_status,

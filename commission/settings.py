@@ -11,6 +11,7 @@ Pure functions only — no Streamlit imports here.
 from __future__ import annotations
 
 import json
+import re
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -70,6 +71,13 @@ class ChannelFlatRule(BaseModel):
 class TiersConfig(BaseModel):
     tiers: list[CommissionTier]
     channel_flat_commissions: list[ChannelFlatRule] = Field(default_factory=list)
+    # Clearance-stock rule: any order whose seller note contains this tag earns
+    # a flat commission instead of the tier %, and its net is left OUT of the
+    # monthly net that picks the tier on normal sales. The tag matches with
+    # flexible spacing and an optional trailing year, so "SALES JUNE 2026" and
+    # "SALES JUNE" both qualify.
+    clearance_tag: str = "SALES JUNE"
+    clearance_flat_amount: float = 10.0
 
     def flat_rule_for(self, channel: str) -> ChannelFlatRule | None:
         ch = (channel or "").lower()
@@ -77,6 +85,15 @@ class TiersConfig(BaseModel):
             if r.channel.lower() == ch:
                 return r
         return None
+
+    def is_clearance_note(self, note: str) -> bool:
+        """True when the seller note carries the clearance tag (tolerant of
+        extra spaces and a missing/extra trailing year)."""
+        tag = (self.clearance_tag or "").strip()
+        if not tag:
+            return False
+        pattern = r"\b" + r"\s+".join(re.escape(w) for w in tag.split())
+        return re.search(pattern, (note or "").upper()) is not None
 
 
 def load_tiers(path: Path = TIERS_FILE) -> TiersConfig:

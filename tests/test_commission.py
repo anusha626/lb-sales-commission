@@ -24,11 +24,13 @@ def _make_order(
     net: float | None = None,
     channel: str = "admin_panel",
     date: datetime | None = None,
+    is_clearance: bool = False,
 ) -> OrderResult:
     net = gross if net is None else net
     return OrderResult(
         order_number=order_number,
         order_date=date or datetime(2026, 5, 1),
+        is_clearance=is_clearance,
         channel=channel,
         financial_status="Paid",
         order_status="Open",
@@ -191,3 +193,65 @@ def test_split_70_30_commission_distributed_correctly():
     # 0.8% tier: MINKEI 7000*0.008=56; LILY 3000*0.008=24
     assert by_name["MINKEI"].commission_amount == 56.0
     assert by_name["LILY"].commission_amount == 24.0
+
+
+# ---------------------------------------------------------------------------
+# Clearance-stock flat rule
+# ---------------------------------------------------------------------------
+
+def test_clearance_order_earns_flat_amount():
+    """A clearance order earns the flat RM10, not the tier %."""
+    orders = [
+        _make_order(
+            order_number="#C1",
+            sa_shares=[("MINKEI", 1.0)],
+            gross=500.0,
+            is_clearance=True,
+        )
+    ]
+    report = compute_commissions(orders, _default_tiers())
+    minkei = report.sa_summaries[0]
+    assert minkei.commission_amount == 10.0  # flat, not 500*0.008
+
+
+def test_clearance_flat_split_by_ratio():
+    """RM10 flat is divided by each SA's share — 70/30 → RM7 / RM3."""
+    orders = [
+        _make_order(
+            order_number="#C2",
+            sa_shares=[("MINKEI", 0.7), ("LILY", 0.3)],
+            gross=1000.0,
+            is_clearance=True,
+        )
+    ]
+    report = compute_commissions(orders, _default_tiers())
+    by = {s.sa_name: s for s in report.sa_summaries}
+    assert by["MINKEI"].commission_amount == 7.0
+    assert by["LILY"].commission_amount == 3.0
+
+
+def test_clearance_net_excluded_from_tier():
+    """A huge clearance sale must not push the SA into a higher bracket on
+    their normal full-price sale."""
+    orders = [
+        _make_order(order_number="#N1", sa_shares=[("MINKEI", 1.0)], gross=10000.0),
+        _make_order(order_number="#C3", sa_shares=[("MINKEI", 1.0)],
+                    gross=900000.0, is_clearance=True),
+    ]
+    report = compute_commissions(orders, _default_tiers())
+    minkei = report.sa_summaries[0]
+    # Tier picked on 10,000 (0.8%), NOT on 910,000 (which would be 1.2%).
+    assert minkei.tier_rate_pct == 0.80
+    # Commission = 10000*0.8% (normal) + RM10 (clearance flat)
+    assert minkei.commission_amount == round(10000 * 0.008 + 10.0, 2)
+
+
+def test_clearance_tag_detection_year_optional():
+    """Tag matches with or without the trailing year, tolerates spacing, and
+    does not false-match on COMPANY SALES."""
+    cfg = _default_tiers()
+    assert cfg.is_clearance_note("MINKEI\nSALES JUNE 2026\nCASH RM500") is True
+    assert cfg.is_clearance_note("MINKEI\nSALES JUNE\nCASH RM500") is True
+    assert cfg.is_clearance_note("minkei sales  june 2026") is True   # case + spacing
+    assert cfg.is_clearance_note("MINKEI\nWALK IN PJ\nCASH RM500") is False
+    assert cfg.is_clearance_note("COMPANY SALES\nCASH RM500") is False
