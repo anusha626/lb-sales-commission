@@ -79,3 +79,42 @@ def test_excluded_orders_still_shown():
     assert by_num["#CANCEL"].excluded is True
     assert by_num["#UNPAID"].excluded is True
     assert by_num["#KEEP"].excluded is False
+
+
+def test_paid_on_month_note_overrides_settlement_month():
+    """A 'PAID ON <month> <year>' note attributes the order to that settlement
+    month, overriding EasyStore transaction timestamps recorded at deal time.
+    e.g. a May deal whose balance is paid in June counts in June."""
+    settings = load_all()
+    df = _df([_row(
+        **{
+            "Order Number": "#9867",
+            "Date": "2026-05-21 13:52:46",
+            "Total Amount": "11350",
+            "Note": "SHASHA\nWALK IN PG\nMYDEBIT 5043 RM5000\n"
+                    "MYDEBIT 3953 RM5000\nCASH RM1350 PAID ON JUN 2026",
+            "Transaction status": "Success",
+            "Transaction date": "2026-05-21 14:25:33",
+            "Transaction amount": "5000",
+        }
+    )])
+    o = build_order_results(df, settings)[0]
+    assert o.order_date.date().isoformat() == "2026-05-21"   # ordered in May
+    assert o.settlement_date is not None
+    assert o.settlement_date.strftime("%Y-%m") == "2026-06"  # but settles in June
+
+
+def test_no_paid_on_note_keeps_transaction_settlement():
+    """Without a 'PAID ON' note, settlement stays the last successful
+    transaction date."""
+    settings = load_all()
+    df = _df([_row(
+        **{
+            "Note": "MINKEI\nCASH RM1000",
+            "Transaction status": "Success",
+            "Transaction date": "2026-05-02 11:00:00",
+            "Transaction amount": "1000",
+        }
+    )])
+    o = build_order_results(df, settings)[0]
+    assert o.settlement_date.strftime("%Y-%m") == "2026-05"

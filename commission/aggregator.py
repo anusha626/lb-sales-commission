@@ -13,6 +13,7 @@ Pure I/O on dataframes / dicts; no Streamlit.
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from io import StringIO
 from typing import IO
@@ -116,6 +117,38 @@ def _parse_date(s: str) -> datetime:
     return datetime.min
 
 
+_MONTH_NAMES = {
+    "JAN": 1, "JANUARY": 1, "FEB": 2, "FEBRUARY": 2, "MAR": 3, "MARCH": 3,
+    "APR": 4, "APRIL": 4, "MAY": 5, "JUN": 6, "JUNE": 6, "JUL": 7, "JULY": 7,
+    "AUG": 8, "AUGUST": 8, "SEP": 9, "SEPT": 9, "SEPTEMBER": 9, "OCT": 10,
+    "OCTOBER": 10, "NOV": 11, "NOVEMBER": 11, "DEC": 12, "DECEMBER": 12,
+}
+# "PAID ON JUN 2026", "PAID JUNE", "BALANCE PAID ON 15 JUN 2026" — a payment
+# month stated by the seller, with optional leading day and trailing year.
+_PAID_MONTH_RE = re.compile(
+    r"PAID\s+(?:ON\s+)?(?:\d{1,2}(?:ST|ND|RD|TH)?\s+)?([A-Z]+)\.?\s*(\d{4})?",
+    re.IGNORECASE,
+)
+
+
+def _paid_month_from_note(note: str, order_date: datetime) -> datetime | None:
+    """If the seller note states the month a (balance) payment was made — e.g.
+    'CASH RM1350 PAID ON JUN 2026' — return a date in that month to use as the
+    settlement date. This lets staff override the EasyStore transaction
+    timestamps (often recorded at deal time) when a balance is actually settled
+    in a later month. Returns None if no such phrase is present."""
+    for m in _PAID_MONTH_RE.finditer((note or "").upper()):
+        month = _MONTH_NAMES.get(m.group(1))
+        if month is None:
+            continue
+        year = int(m.group(2)) if m.group(2) else order_date.year
+        if m.group(2) is None and month < order_date.month:
+            year += 1  # balance carried into early next year
+        # Day is irrelevant for month attribution; use a safe mid-month date.
+        return datetime(year, month, 15)
+    return None
+
+
 def _excluded_reason(
     order_status: str, financial_status: str, include_unpaid: bool
 ) -> str | None:
@@ -162,7 +195,15 @@ def build_order_results(
         if settlement_date == datetime.min:
             settlement_date = None
 
-        is_clearance = settings.tiers.is_clearance_note(row["Note"] or "")
+        note_text = row["Note"] or ""
+        # A seller-note "PAID ON <month> <year>" overrides the transaction
+        # timestamps for payout-month attribution: the order counts in the
+        # month its balance was actually settled, as stated by the seller.
+        note_paid = _paid_month_from_note(note_text, order_date)
+        if note_paid is not None:
+            settlement_date = note_paid
+
+        is_clearance = settings.tiers.is_clearance_note(note_text)
 
         gross = _parse_total(row["Total Amount"])
         channel = row.get("Channel", "") or ""
