@@ -454,6 +454,17 @@ def parse_seller_note(
                 )
                 break
 
+    # Deposit line with no identifiable payment method → send to Review rather
+    # than letting another portion silently absorb it (which over-charges the
+    # card rate on the deposit). Covers "DEPOSIT TRANSFER RM1000" and a bare
+    # "DEPOSIT RM1000"; a deposit that DOES name a method ("DEPOSIT CASH RM500",
+    # "DEPO ONLINE TRANSFER ...") is recognised and not flagged.
+    for line in lines:
+        if re.search(r"\bDEPO", line) and _AMOUNT_RE.search(line) and _find_keyword(line) is None:
+            flags.append(
+                f"Deposit line has no payment method — confirm in Review: '{line.strip()}'"
+            )
+
     return ParsedNote(
         sa_shares=sa_shares,
         payments=payments,

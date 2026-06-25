@@ -349,3 +349,38 @@ def test_full_mastercard_still_preferred_over_master_shorthand():
     )
     assert _methods(p) == [PaymentMethod.MASTERCARD_CREDIT]
     assert p.payments[0].last4 == "5403"
+
+
+# ---------------------------------------------------------------------------
+# Deposit lines with no payment method → flagged for Review
+# ---------------------------------------------------------------------------
+
+def _has_deposit_flag(p):
+    return any("Deposit line has no payment method" in f for f in p.review_flags)
+
+
+def test_deposit_transfer_without_method_flagged():
+    """'DEPOSIT TRANSFER RM1000' names no recognised method — flag for Review
+    instead of letting the card portion absorb (and over-charge) it."""
+    p = parse_seller_note(
+        "LILY WALK IN PJ\nDEPOSIT TRANSFER RM1000\nVISA 8407 RM5990",
+        order_total=6990.0,
+    )
+    assert _has_deposit_flag(p)
+
+
+def test_bare_deposit_without_method_flagged():
+    p = parse_seller_note(
+        "SHASHA CHAT D\nDEPOSIT RM1000\nVISA 8407 RM5790",
+        order_total=6790.0,
+    )
+    assert _has_deposit_flag(p)
+
+
+def test_deposit_with_named_method_not_flagged():
+    """A deposit that DOES name its method (cash / online transfer) is
+    recognised and must NOT be flagged."""
+    cash = parse_seller_note("MINKEI\nDEPOSIT CASH RM5000\nVISA 1234 RM7990", order_total=12990.0)
+    assert not _has_deposit_flag(cash)
+    xfer = parse_seller_note("EILEEN\nDEPO ONLINE TRANSFER MBB 0150 RM1000\nCASH RM2000", order_total=3000.0)
+    assert not _has_deposit_flag(xfer)
