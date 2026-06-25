@@ -185,14 +185,35 @@ def test_multi_portion_minor_mismatch_aligned_silently():
     assert not any("Scaled" in f for f in p.review_flags)
 
 
-def test_multi_portion_large_mismatch_flagged():
-    """Significant drift (>10%) triggers a flag so the user can verify."""
+def test_multi_portion_large_mismatch_kept_and_flagged():
+    """Significant drift (>10%) is NOT scaled — the written amounts are kept
+    (no fabricated split) and the order is flagged for Review so a human can
+    resolve the real gap (missing line, unpaid balance, or wrong total)."""
     p = parse_seller_note(
         "EILEEN\nONLINE TRANSFER MBB 0150 KL - RM500\nMASTERCARD 5620 - RM500",
         order_total=10000.0,
     )
-    assert any("Scaled" in f for f in p.review_flags)
-    assert sum(pp.amount for pp in p.payments) == 10000.0
+    # Written amounts preserved, not scaled up to the order total.
+    assert [pp.amount for pp in p.payments] == [500.0, 500.0]
+    assert any("differs from order total" in f for f in p.review_flags)
+
+
+def test_multi_portion_bank_transfer_not_scaled_to_total():
+    """Real case: 7 transfers summing to RM8,900 against a RM9,900 order must
+    keep their written amounts (RM1,000 etc.), not be scaled to RM1,112.36."""
+    note = (
+        "MINKEI\nWHATSAPP + WALK IN PJ\n"
+        "19/5 DEPO ONLINE TRANSFER MBB 0150 KL - RM1000\n"
+        "20/5 ONLINE TRANSFER MBB 0150 KL - RM2000\n"
+        "23/5 ONLINE TRANSFER MBB 0150 KL - RM1000\n"
+        "24/5 ONLINE TRANSFER MBB 0150 KL - RM1000\n"
+        "12/6 ONLINE TRANSFER MBB 0150 KL - RM2000\n"
+        "13/6 ONLINE TRANSFER MBB 0150 KL - RM1000\n"
+        "14/6 ONLINE TRANSFER MB 0150 KL - RM900"
+    )
+    p = parse_seller_note(note, order_total=9900.0)
+    assert [pp.amount for pp in p.payments] == [1000.0, 2000.0, 1000.0, 1000.0, 2000.0, 1000.0, 900.0]
+    assert any("differs from order total" in f for f in p.review_flags)
 
 
 # ---------------------------------------------------------------------------

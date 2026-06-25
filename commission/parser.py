@@ -400,19 +400,20 @@ def parse_seller_note(
                         update={"amount": round(order_total, 2)}
                     )
                 elif parsed_sum > 0:
-                    # Multiple portions: scale proportionally to fit the total.
-                    # Flag for review if the scaling factor is meaningfully
-                    # off — likely a real data error rather than rounding.
+                    # Multiple portions: only reconcile SMALL drift (within
+                    # 10%), which is almost always rounding or a minor typo.
+                    # A large gap is more likely a missing payment line, an
+                    # unpaid balance, or a wrong order total — scaling there
+                    # would fabricate a fake per-payment split (e.g. RM1,000
+                    # shown as RM1,112.36). Instead we keep the amounts exactly
+                    # as written and let the final-sum check below flag the
+                    # order for Review so a human can resolve the real gap.
                     ratio = order_total / parsed_sum
-                    for i in explicit_idx:
-                        payments[i] = payments[i].model_copy(
-                            update={"amount": round(payments[i].amount * ratio, 2)}
-                        )
-                    if abs(ratio - 1.0) > 0.10:
-                        flags.append(
-                            f"Scaled multi-portion payments by {ratio:.3f} "
-                            f"(parsed sum RM{parsed_sum:.2f} → order total RM{order_total:.2f})"
-                        )
+                    if abs(ratio - 1.0) <= 0.10:
+                        for i in explicit_idx:
+                            payments[i] = payments[i].model_copy(
+                                update={"amount": round(payments[i].amount * ratio, 2)}
+                            )
 
     # Final sanity check — should only fire for TikTok (where alignment was
     # skipped) or pathological multi-implicit cases.
