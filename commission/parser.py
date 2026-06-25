@@ -77,15 +77,18 @@ _KEYWORDS: tuple[_Keyword, ...] = (
 
 _AMOUNT_RE = re.compile(r"RM\s?([\d,]+(?:\.\d+)?)", re.IGNORECASE)
 _FOUR_DIGIT_RE = re.compile(r"\b(\d{4})\b")
-# Split notation: "MINKEI 70% LILY 30%", "MINKEI 60% / LILY 40%", "MINKEI 60%/LILY 40%"
+# Split notation: "MINKEI 70% LILY 30%", "MINKEI 60% / LILY 40%", "MINKEI 60%/LILY 40%".
+# The name is captured as up to TWO words so an SA name typed with a stray space
+# ("MIN KEI 40%") is matched as a whole, not truncated to its last word ("KEI").
 _SPLIT_RE = re.compile(
-    r"([A-Z][A-Z]+)\s*(\d{1,3})\s*%",
+    r"([A-Z]+(?:\s+[A-Z]+)?)\s*(\d{1,3})\s*%",
     re.IGNORECASE,
 )
 # Amount-split notation: each SA followed by their sales amount in RM, e.g.
-# "CHLOE RM1350 MINKEI RM5050". Each SA's share is amount / sum(amounts).
+# "CHLOE RM1350 MINKEI RM5050". Each SA's share is amount / sum(amounts). The
+# second word is only taken when it isn't the "RM<amount>" itself.
 _AMOUNT_SHARE_RE = re.compile(
-    r"([A-Z][A-Z]+)\s*RM\s?([\d,]+(?:\.\d+)?)",
+    r"([A-Z]+(?:\s+(?!RM\d)[A-Z]+)?)\s*RM\s?([\d,]+(?:\.\d+)?)",
     re.IGNORECASE,
 )
 # Tokens that may sit before an "RM<amount>" but are never an SA name —
@@ -148,6 +151,29 @@ def _parse_amounts_and_last4(
     return amounts, last4
 
 
+def _best_sa_match(token: str, sa_pool: list[str]) -> str | None:
+    """Fuzzy-match a captured token to a canonical SA name, tolerating a name
+    typed as two words ('MIN KEI' -> 'MINKEI') and a stray channel/location
+    word captured in front of it ('PJ SHASHA' -> 'SHASHA').
+
+    Tries the token as written, with internal spaces removed, and just its
+    last word, returning the best match at or above the fuzzy threshold.
+    """
+    token = token.strip()
+    variants = {token, token.replace(" ", "")}
+    parts = token.split()
+    if parts:
+        variants.add(parts[-1])
+    pool = sa_pool + [HOUSE_ACCOUNT]
+    best_name: str | None = None
+    best_score = 0.0
+    for v in variants:
+        m = process.extractOne(v, pool, scorer=fuzz.ratio)
+        if m and m[1] > best_score:
+            best_name, best_score = m[0], m[1]
+    return best_name if best_score >= SA_FUZZY_THRESHOLD else None
+
+
 def _detect_split_shares(
     note: str, sa_pool: list[str]
 ) -> list[SAShare] | None:
@@ -158,7 +184,7 @@ def _detect_split_shares(
     """
     candidates: list[tuple[str, float, int]] = []  # (raw_token, pct, position)
     for m in _SPLIT_RE.finditer(note):
-        token = m.group(1).upper()
+        token = m.group(1).upper().strip()
         try:
             pct = float(m.group(2)) / 100.0
         except ValueError:
@@ -166,11 +192,8 @@ def _detect_split_shares(
         # Reject tokens that look like generic words (channel keywords etc.)
         if token in {"WALK", "WALKIN", "WHATSAPP", "CHATDADDY", "TIKTOK", "ONLINE", "STORE"}:
             continue
-        match = process.extractOne(token, sa_pool + [HOUSE_ACCOUNT], scorer=fuzz.ratio)
-        if match is None:
-            continue
-        canonical, score, _ = match
-        if score < SA_FUZZY_THRESHOLD:
+        canonical = _best_sa_match(token, sa_pool)
+        if canonical is None:
             continue
         candidates.append((canonical, pct, m.start()))
 
@@ -199,7 +222,7 @@ def _detect_amount_shares(
     candidates: list[tuple[str, float, int]] = []  # (name, amount, position)
     seen: set[str] = set()
     for m in _AMOUNT_SHARE_RE.finditer(note):
-        token = m.group(1).upper()
+        token = m.group(1).upper().strip()
         if token in _NON_SA_TOKENS:
             continue
         try:
@@ -208,13 +231,8 @@ def _detect_amount_shares(
             continue
         if amount <= 0:
             continue
-        match = process.extractOne(
-            token, sa_pool + [HOUSE_ACCOUNT], scorer=fuzz.ratio
-        )
-        if match is None:
-            continue
-        canonical, score, _ = match
-        if score < SA_FUZZY_THRESHOLD:
+        canonical = _best_sa_match(token, sa_pool)
+        if canonical is None:
             continue
         if canonical in seen:
             continue

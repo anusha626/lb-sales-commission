@@ -121,6 +121,22 @@ def test_split_70_30():
     assert p.payments[0].last4 == "1104"
 
 
+def test_split_sa_name_with_stray_space():
+    """An SA name typed as two words ('MIN KEI') in a percentage split must be
+    matched as MINKEI, not truncated to 'KEI' and dropped — which previously
+    collapsed the order to SHASHA 100%."""
+    p = parse_seller_note(
+        "SHASHA 60% MIN KEI 40% ONLINE CHATDADDY + WALK IN PJ\n"
+        "DEPOSIT TRANSFER RM1000 VISA 9252 RM15800",
+        order_total=16800.0,
+        sa_list=["SHASHA", "MINKEI", "LILY", "CHLOE", "EILEEN", "MP"],
+    )
+    assert {(s.name, round(s.share, 2)) for s in p.sa_shares} == {
+        ("SHASHA", 0.6),
+        ("MINKEI", 0.4),
+    }
+
+
 def test_amount_split_divides_by_total():
     # Each SA is followed by their own sales amount (no percentages). Shares
     # are amount / sum(amounts): CHLOE 1350/6400, MINKEI 5050/6400.
