@@ -724,6 +724,26 @@ def page_report() -> None:
     g3.metric("SA total net", fmt_money(report.total_sa_net))
     g4.metric("Total commission", fmt_money(report.total_commission))
 
+    # Build the all-in-one workbook once (summary + one tab per SA + house +
+    # review + excluded + settings) and offer it right here, so the whole
+    # team's commission downloads as ONE Excel without scrolling past every SA.
+    xlsx = build_workbook(month_orders, report, settings)
+    month_tag = sel_month or datetime.now().strftime("%Y%m")
+    xlsx_name = f"commission_report_{month_tag}.xlsx"
+    st.download_button(
+        "⬇️  Download full report — all SAs in one Excel",
+        data=xlsx,
+        file_name=xlsx_name,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary",
+        key="dl_top",
+    )
+    st.caption(
+        "One workbook: a Summary tab plus one tab per SA (and House, Review, "
+        "Excluded, Settings). The small ⬇ on each table below only exports that "
+        "one SA — use this button for everyone at once."
+    )
+
     if summaries:
         st.subheader("Net sales by SA")
         chart_df = pd.DataFrame(
@@ -796,13 +816,12 @@ def page_report() -> None:
                 )
 
     st.divider()
-    xlsx = build_workbook(month_orders, report, settings)
-    month_tag = sel_month or datetime.now().strftime("%Y%m")
     st.download_button(
         "Download Excel Report",
         data=xlsx,
-        file_name=f"commission_report_{month_tag}.xlsx",
+        file_name=xlsx_name,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="dl_bottom",
     )
 
 
