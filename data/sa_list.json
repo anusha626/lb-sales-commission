@@ -55,6 +55,10 @@
     {
       "name": "CHRISTY",
       "active": true
+    },
+    {
+      "name": "SUZY",
+      "active": true
     }
   ]
 }
