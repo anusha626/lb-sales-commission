@@ -13,7 +13,7 @@ from io import BytesIO
 from typing import Sequence
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
@@ -24,12 +24,33 @@ from .models import (
     SACommission,
     SAContribution,
 )
-from .settings import AppSettings
+from .settings import AppSettings, TiersConfig
 
 _HEADER_FILL = PatternFill("solid", fgColor="1F2937")
 _HEADER_FONT = Font(bold=True, color="FFFFFF")
 _MONEY_FMT = '"RM"#,##0.00'
 _PCT_FMT = "0.00\\%"
+
+# ---- Presentation palette (per-SA sheet) -----------------------------------
+_NAVY = "1F4E79"
+_GOLD = "9A761F"
+_TEAL = "0F766E"
+_ZEBRA = "F3F6FB"
+_SUBTOTAL_FILL = "E8EEF7"
+_CLR_ZEBRA = "FBF5E6"
+_INK = "1F2937"
+_MUTED = "6B7280"
+_thin = Side(style="thin", color="D6DEEA")
+_BORDER = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
+
+# Redesigned per-SA sheet: one row per order, split into Paid vs Clearance.
+_SA_HEADERS = [
+    "Order #", "Date", "Channel", "Payment",
+    "Gross share", "Charges", "Net share", "Share %", "Commission",
+]
+_SA_NC = len(_SA_HEADERS)  # 9 columns (A–I)
+_SA_NUM_COLS = {5, 6, 7, 9}  # money columns
+_SA_RIGHT_COLS = {5, 6, 7, 8, 9}  # right-aligned columns
 
 
 def _write_header(ws: Worksheet, headers: Sequence[str]) -> None:
@@ -116,81 +137,197 @@ def _build_summary_sheet(
     _autosize(ws)
 
 
+def _payment_str(order: OrderResult | None) -> str:
+    """Compact payment summary, e.g. 'Mastercard Credit *2956, Cash'."""
+    if order is None:
+        return ""
+    parts = []
+    for p in order.parsed.payments:
+        s = p.method.value.replace("_", " ").title()
+        if p.last4:
+            s += f" *{p.last4}"
+        parts.append(s)
+    return ", ".join(parts)
+
+
+def _sa_order_data(c, order, tiers_cfg, tier_rate_pct) -> dict:
+    """One order line for the SA sheet, with the real per-order commission."""
+    if order is not None:
+        charges_share = round(order.total_charges * c.share_pct, 2)
+    else:
+        charges_share = round(c.gross_share - c.net_share, 2)
+    is_clr = bool(order and getattr(order, "is_clearance", False))
+    flat_rule = tiers_cfg.flat_rule_for(order.channel) if order is not None else None
+    if is_clr:
+        commission = round(tiers_cfg.clearance_flat_amount * c.share_pct, 2)
+    elif flat_rule is not None:
+        commission = round(flat_rule.amount_per_order * c.share_pct, 2)
+    else:
+        commission = round(c.net_share * tier_rate_pct / 100.0, 2)
+    return {
+        "order": c.order_number,
+        "date": c.order_date.strftime("%Y-%m-%d"),
+        "channel": order.channel if order else "",
+        "payment": _payment_str(order),
+        "gross": c.gross_share,
+        "charges": charges_share,
+        "net": c.net_share,
+        "share": c.share_pct,
+        "commission": commission,
+        "is_clr": is_clr,
+    }
+
+
+def _sa_section(ws: Worksheet, row: int, text: str, fill: str) -> None:
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=_SA_NC)
+    c = ws.cell(row=row, column=1, value=text)
+    c.fill = PatternFill("solid", fgColor=fill)
+    c.font = Font(bold=True, size=11, color="FFFFFF")
+    c.alignment = Alignment(vertical="center", horizontal="left", indent=1)
+    ws.row_dimensions[row].height = 20
+
+
+def _sa_theader(ws: Worksheet, row: int) -> None:
+    for col, h in enumerate(_SA_HEADERS, start=1):
+        c = ws.cell(row=row, column=col, value=h)
+        c.fill = _HEADER_FILL
+        c.font = _HEADER_FONT
+        c.border = _BORDER
+        c.alignment = Alignment(
+            horizontal="right" if col in _SA_RIGHT_COLS else "left",
+            vertical="center",
+        )
+    ws.row_dimensions[row].height = 18
+
+
+def _sa_order_row(ws: Worksheet, row: int, d: dict, zebra_fill: str | None) -> None:
+    label = d["order"] + ("  ·clearance" if d["is_clr"] else "")
+    vals = [
+        label, d["date"], d["channel"], d["payment"],
+        d["gross"], d["charges"], d["net"], d["share"], d["commission"],
+    ]
+    for col, v in enumerate(vals, start=1):
+        c = ws.cell(row=row, column=col, value=v)
+        c.border = _BORDER
+        if zebra_fill:
+            c.fill = PatternFill("solid", fgColor=zebra_fill)
+        if col in _SA_NUM_COLS:
+            c.number_format = _MONEY_FMT
+        elif col == 8:
+            c.number_format = "0%"
+        if col in _SA_RIGHT_COLS:
+            c.alignment = Alignment(horizontal="right")
+
+
+def _sa_subtotal(ws: Worksheet, row: int, label: str, net, commission) -> None:
+    for col in range(1, _SA_NC + 1):
+        cell = ws.cell(row=row, column=col)
+        cell.fill = PatternFill("solid", fgColor=_SUBTOTAL_FILL)
+        cell.border = _BORDER
+    lc = ws.cell(row=row, column=1, value=label)
+    lc.font = Font(bold=True, color=_INK)
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+    lc.alignment = Alignment(horizontal="right", indent=1)
+    nc = ws.cell(row=row, column=7, value=net)
+    nc.number_format = _MONEY_FMT
+    nc.font = Font(bold=True)
+    nc.alignment = Alignment(horizontal="right")
+    cc = ws.cell(row=row, column=9, value=commission)
+    cc.number_format = _MONEY_FMT
+    cc.font = Font(bold=True)
+    cc.alignment = Alignment(horizontal="right")
+
+
 def _build_sa_sheet(
     ws: Worksheet,
     sa: SACommission,
     orders_by_number: dict[str, OrderResult],
+    tiers_cfg: TiersConfig,
 ) -> None:
     ws.title = f"SA - {sa.sa_name}"[:31]  # Excel sheet name limit
-    headers = [
-        "Order #",
-        "Date",
-        "Channel",
-        "Order Gross",
-        "Payment Method",
-        "Last 4",
-        "Portion Gross",
-        "Rate Applied",
-        "Charge Amount",
-        "Portion Net",
-        "Split %",
-        "Contribution to SA (Net)",
-    ]
-    _write_header(ws, headers)
-    row = 2
-    for c in sa.contributions:
-        order = orders_by_number.get(c.order_number)
-        clr = bool(order and order.is_clearance)
-        on_label = c.order_number + ("  ·CLEARANCE(flat)" if clr else "")
-        if order is None or order.excluded or not order.charges:
-            ws.cell(row=row, column=1, value=on_label)
-            ws.cell(row=row, column=2, value=c.order_date.strftime("%Y-%m-%d"))
-            ws.cell(row=row, column=3, value=order.channel if order else "")
-            ws.cell(row=row, column=4, value=order.gross_total if order else 0).number_format = _MONEY_FMT
-            ws.cell(row=row, column=11, value=c.share_pct).number_format = "0.0%"
-            ws.cell(row=row, column=12, value=c.net_share).number_format = _MONEY_FMT
-            row += 1
-            continue
-        for ch in order.charges:
-            ws.cell(row=row, column=1, value=on_label)
-            ws.cell(row=row, column=2, value=order.order_date.strftime("%Y-%m-%d"))
-            ws.cell(row=row, column=3, value=order.channel)
-            ws.cell(row=row, column=4, value=order.gross_total).number_format = _MONEY_FMT
-            ws.cell(row=row, column=5, value=ch.method.value)
-            ws.cell(row=row, column=6, value=ch.last4 or "")
-            ws.cell(row=row, column=7, value=ch.gross).number_format = _MONEY_FMT
-            ws.cell(row=row, column=8, value=ch.rate_label)
-            ws.cell(row=row, column=9, value=ch.charge).number_format = _MONEY_FMT
-            ws.cell(row=row, column=10, value=ch.net).number_format = _MONEY_FMT
-            ws.cell(row=row, column=11, value=c.share_pct).number_format = "0.0%"
-            # Only emit the contribution figure on the first portion row of an order
-            if ch is order.charges[0]:
-                ws.cell(row=row, column=12, value=c.net_share).number_format = _MONEY_FMT
-            row += 1
+    ws.sheet_view.showGridLines = False
 
-    # Totals — clearance sales are a separate flat bucket, kept OUT of the
-    # sales total (and the tier).
-    sales_label = "SALES TOTAL" + (
-        " (excl. clearance)" if sa.clearance_order_count else ""
+    # ---- Title block -------------------------------------------------------
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=_SA_NC)
+    title = ws.cell(row=1, column=1, value=sa.sa_name)
+    title.font = Font(bold=True, size=18, color=_INK)
+    title.alignment = Alignment(vertical="center", indent=1)
+    ws.row_dimensions[1].height = 28
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=_SA_NC)
+    sub = ws.cell(
+        row=2, column=1,
+        value=f"Tier: {sa.tier_label}     •     Total commission: "
+              f"RM{sa.commission_amount:,.2f}",
     )
-    ws.cell(row=row, column=1, value=sales_label).font = Font(bold=True)
-    ws.cell(row=row, column=12, value=sa.total_net_sales).number_format = _MONEY_FMT
-    ws.cell(row=row, column=12).font = Font(bold=True)
+    sub.font = Font(size=10, italic=True, color=_MUTED)
+    sub.alignment = Alignment(vertical="center", indent=1)
+
+    # ---- Split into paid vs clearance --------------------------------------
+    rows = [
+        _sa_order_data(c, orders_by_number.get(c.order_number), tiers_cfg, sa.tier_rate_pct)
+        for c in sorted(sa.contributions, key=lambda c: c.order_date)
+    ]
+    paid = [d for d in rows if not d["is_clr"]]
+    clearance = [d for d in rows if d["is_clr"]]
+
+    row = 4
+    # ---- PAID SALES table --------------------------------------------------
+    _sa_section(ws, row, "PAID SALES", _NAVY)
     row += 1
-    if sa.clearance_order_count:
-        ws.cell(
-            row=row, column=1,
-            value=f"Clearance (flat): {sa.clearance_order_count} order(s)",
-        ).font = Font(italic=True)
-        ws.cell(row=row, column=10, value=sa.clearance_net_sales).number_format = _MONEY_FMT
-        ws.cell(row=row, column=12, value=sa.clearance_commission).number_format = _MONEY_FMT
-        ws.cell(row=row, column=12).font = Font(italic=True)
+    _sa_theader(ws, row)
+    row += 1
+    for i, d in enumerate(paid):
+        _sa_order_row(ws, row, d, _ZEBRA if i % 2 else None)
         row += 1
-    ws.cell(row=row, column=1, value="TOTAL COMMISSION").font = Font(bold=True, color="0F766E")
-    ws.cell(row=row, column=11, value=f"Tier: {sa.tier_label}").font = Font(italic=True)
-    ws.cell(row=row, column=12, value=sa.commission_amount).number_format = _MONEY_FMT
-    ws.cell(row=row, column=12).font = Font(bold=True, color="0F766E")
-    _autosize(ws)
+    # Use the authoritative SACommission figures for subtotals so the two
+    # tables + grand total reconcile exactly (summing per-order rounded values
+    # would drift a few cents across many rows).
+    _sa_subtotal(
+        ws, row, "PAID SALES TOTAL",
+        sa.total_net_sales,
+        round(sa.commission_amount - sa.clearance_commission, 2),
+    )
+    row += 2
+
+    # ---- CLEARANCE SALES table (only if any) -------------------------------
+    if clearance:
+        _sa_section(
+            ws, row,
+            f"CLEARANCE SALES  ·  flat RM{tiers_cfg.clearance_flat_amount:,.0f} per order"
+            f"  ·  excluded from sales total & tier",
+            _GOLD,
+        )
+        row += 1
+        _sa_theader(ws, row)
+        row += 1
+        for i, d in enumerate(clearance):
+            _sa_order_row(ws, row, d, _CLR_ZEBRA if i % 2 else None)
+            row += 1
+        _sa_subtotal(
+            ws, row, "CLEARANCE TOTAL",
+            sa.clearance_net_sales,
+            sa.clearance_commission,
+        )
+        row += 2
+
+    # ---- Grand total commission -------------------------------------------
+    for col in range(1, _SA_NC + 1):
+        ws.cell(row=row, column=col).fill = PatternFill("solid", fgColor=_TEAL)
+        ws.cell(row=row, column=col).border = _BORDER
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+    g = ws.cell(row=row, column=1, value="TOTAL COMMISSION")
+    g.font = Font(bold=True, size=12, color="FFFFFF")
+    g.alignment = Alignment(horizontal="right", vertical="center", indent=1)
+    gc = ws.cell(row=row, column=9, value=sa.commission_amount)
+    gc.number_format = _MONEY_FMT
+    gc.font = Font(bold=True, size=12, color="FFFFFF")
+    gc.alignment = Alignment(horizontal="right")
+    ws.row_dimensions[row].height = 22
+
+    # ---- Column widths & freeze -------------------------------------------
+    for col, w in enumerate([16, 12, 14, 32, 14, 12, 14, 9, 14], start=1):
+        ws.column_dimensions[get_column_letter(col)].width = w
+    ws.freeze_panes = "A4"
 
 
 def _build_review_sheet(ws: Worksheet, orders: list[OrderResult]) -> None:
@@ -343,7 +480,7 @@ def build_workbook(
     by_number = {o.order_number: o for o in orders}
     for s in report.sa_summaries:
         ws = wb.create_sheet()
-        _build_sa_sheet(ws, s, by_number)
+        _build_sa_sheet(ws, s, by_number, settings.tiers)
 
     if report.house:
         _build_house_sheet(wb.create_sheet(), report.house, by_number)
