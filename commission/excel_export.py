@@ -24,6 +24,7 @@ from .models import (
     SACommission,
     SAContribution,
 )
+from .parser import HOUSE_ACCOUNT
 from .settings import AppSettings, TiersConfig
 
 _HEADER_FILL = PatternFill("solid", fgColor="1F2937")
@@ -271,6 +272,68 @@ def _sa_subtotal(
         _put(10, f"=SUM(J{start}:J{end})" if end >= start else 0)  # Commission
 
 
+def _sa_refund_table(ws: Worksheet, row: int, refunds: list) -> tuple[int, str]:
+    """Refunds table: refunded orders for this SA with a manual Clawback column
+    that deducts from the total. Returns (next_row, clawback_subtotal_cell)."""
+    _sa_section(
+        ws, row,
+        "REFUNDS — COMMISSION CLAWBACK  ·  enter the commission to deduct "
+        "(as a negative) if it was already paid",
+        "B42318",
+    )
+    row += 1
+    hdrs = {1: "Order #", 2: "Order date", 3: "Settled", 4: "Payment",
+            5: "Refunded amount", 9: "Share %", 10: "Clawback (enter −)"}
+    for col in range(1, _SA_NC + 1):
+        c = ws.cell(row=row, column=col, value=hdrs.get(col))
+        c.fill = _HEADER_FILL
+        c.font = _HEADER_FONT
+        c.border = _BORDER
+        c.alignment = Alignment(
+            horizontal="right" if col in (5, 9, 10) else "left", vertical="center"
+        )
+    ws.row_dimensions[row].height = 18
+    row += 1
+    start = row
+    for i, (o, share) in enumerate(refunds):
+        settled = (o.settlement_date or o.order_date).strftime("%Y-%m")
+        vals = {
+            1: o.order_number,
+            2: o.order_date.strftime("%Y-%m-%d"),
+            3: settled,
+            4: _payment_str(o),
+            5: round(o.gross_total * share, 2),
+            9: share,
+            10: None,  # manual clawback entry
+        }
+        fill = "FBECEA" if i % 2 else None
+        for col in range(1, _SA_NC + 1):
+            c = ws.cell(row=row, column=col, value=vals.get(col))
+            c.border = _BORDER
+            if fill:
+                c.fill = PatternFill("solid", fgColor=fill)
+            if col == 5 or col == 10:
+                c.number_format = _MONEY_FMT
+            elif col == 9:
+                c.number_format = "0%"
+            if col in (5, 9, 10):
+                c.alignment = Alignment(horizontal="right")
+        row += 1
+    for col in range(1, _SA_NC + 1):
+        cell = ws.cell(row=row, column=col)
+        cell.fill = PatternFill("solid", fgColor=_SUBTOTAL_FILL)
+        cell.border = _BORDER
+    lc = ws.cell(row=row, column=1, value="TOTAL CLAWBACK (deducted from commission)")
+    lc.font = Font(bold=True, color="B42318")
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=9)
+    lc.alignment = Alignment(horizontal="right", indent=1)
+    cc = ws.cell(row=row, column=10, value=f"=SUM(J{start}:J{row - 1})" if row - 1 >= start else 0)
+    cc.number_format = _MONEY_FMT
+    cc.font = Font(bold=True, color="B42318")
+    cc.alignment = Alignment(horizontal="right")
+    return row + 2, f"J{row}"
+
+
 def _sa_order_table(
     ws: Worksheet, row: int, section: str, section_fill: str, zebra: str,
     data: list[dict], rate: float, flat: float, label: str,
@@ -334,6 +397,7 @@ def _build_sa_sheet(
     *,
     payout_month: str | None = None,
     payout_label: str | None = None,
+    refunds: list | None = None,
 ) -> None:
     ws.title = f"SA - {sa.sa_name}"[:31]  # Excel sheet name limit
     ws.sheet_view.showGridLines = False
@@ -409,7 +473,12 @@ def _build_sa_sheet(
         row, cash_cell = _sa_bonus_table(ws, row, sa, achieved)
         subtotal_cells.append(cash_cell)
 
-    # ---- Grand total commission (sum of all tables' commission) ------------
+    # ---- Table 5: refunds / commission clawback ----------------------------
+    clawback_cell = None
+    if refunds:
+        row, clawback_cell = _sa_refund_table(ws, row, refunds)
+
+    # ---- Grand total commission (all tables, minus any clawback) -----------
     for col in range(1, _SA_NC + 1):
         ws.cell(row=row, column=col).fill = PatternFill("solid", fgColor=_TEAL)
         ws.cell(row=row, column=col).border = _BORDER
@@ -417,7 +486,8 @@ def _build_sa_sheet(
     g = ws.cell(row=row, column=1, value="TOTAL COMMISSION")
     g.font = Font(bold=True, size=12, color="FFFFFF")
     g.alignment = Alignment(horizontal="right", vertical="center", indent=1)
-    gc = ws.cell(row=row, column=10, value="=" + "+".join(subtotal_cells))
+    grand = "=" + "+".join(subtotal_cells) + (f"+{clawback_cell}" if clawback_cell else "")
+    gc = ws.cell(row=row, column=10, value=grand)
     gc.number_format = _MONEY_FMT
     gc.font = Font(bold=True, size=12, color="FFFFFF")
     gc.alignment = Alignment(horizontal="right")
@@ -573,15 +643,25 @@ def build_workbook(
     *,
     payout_month: str | None = None,
     payout_label: str | None = None,
+    refunded_orders: list[OrderResult] | None = None,
 ) -> bytes:
     """Render the full report and return raw .xlsx bytes.
 
     `payout_month` (e.g. "2026-06") splits each SA's orders into
-    previous-month-ordered vs current-month-ordered tables.
+    previous-month-ordered vs current-month-ordered tables. `refunded_orders`
+    are listed per SA in a manual-entry clawback table.
     """
     wb = Workbook()
     summary_ws = wb.active
     _build_summary_sheet(summary_ws, report.sa_summaries, report.house)
+
+    # Group refunded orders by the SA(s) named on them.
+    refunds_by_sa: dict[str, list] = {}
+    for o in (refunded_orders or []):
+        for sh in o.parsed.sa_shares:
+            if sh.name == HOUSE_ACCOUNT:
+                continue
+            refunds_by_sa.setdefault(sh.name, []).append((o, sh.share))
 
     by_number = {o.order_number: o for o in orders}
     for s in report.sa_summaries:
@@ -589,6 +669,7 @@ def build_workbook(
         _build_sa_sheet(
             ws, s, by_number, settings.tiers,
             payout_month=payout_month, payout_label=payout_label,
+            refunds=refunds_by_sa.get(s.sa_name),
         )
 
     if report.house:

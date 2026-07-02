@@ -755,10 +755,14 @@ def page_report() -> None:
     # Build the all-in-one workbook once (summary + one tab per SA + house +
     # review + excluded + settings) and offer it right here, so the whole
     # team's commission downloads as ONE Excel without scrolling past every SA.
+    refunded_orders = [
+        o for o in orders if (o.financial_status or "").strip().lower() == "refunded"
+    ]
     xlsx = build_workbook(
         month_orders, report, settings,
         payout_month=sel_month,
         payout_label=_month_label(sel_month) if sel_month else None,
+        refunded_orders=refunded_orders,
     )
     month_tag = sel_month or datetime.now().strftime("%Y%m")
     xlsx_name = f"commission_report_{month_tag}.xlsx"
