@@ -334,7 +334,9 @@ def parse_seller_note(
         return ParsedNote(raw_note=raw, review_flags=flags)
 
     # ---- Normalise --------------------------------------------------------
-    upper_note = raw.upper()
+    # Full-width punctuation from phone / CJK keyboards: fold to ASCII so
+    # "MINKEI 70％ RISKA 30％" is read as a 70/30 split, not one SA at 100%.
+    upper_note = raw.upper().translate(str.maketrans("％＋，．", "%+,."))
     lines = [ln.strip() for ln in upper_note.split("\n") if ln.strip()]
 
     # ---- SA shares --------------------------------------------------------

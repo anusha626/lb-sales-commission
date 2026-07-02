@@ -384,3 +384,17 @@ def test_deposit_with_named_method_not_flagged():
     assert not _has_deposit_flag(cash)
     xfer = parse_seller_note("EILEEN\nDEPO ONLINE TRANSFER MBB 0150 RM1000\nCASH RM2000", order_total=3000.0)
     assert not _has_deposit_flag(xfer)
+
+
+def test_fullwidth_percent_split():
+    """Full-width percent signs (phone / CJK keyboards) must still split:
+    'MINKEI 70％ RISKA 30％' → MINKEI 70% / RISKA 30%, not MINKEI 100%."""
+    p = parse_seller_note(
+        "MINKEI 70％ RISKA 30％\nCHATDADDY + WALK IN PG\nCASH RM1690",
+        order_total=1690.0,
+        sa_list=["MINKEI", "RISKA", "LILY", "CHLOE"],
+    )
+    assert {(s.name, round(s.share, 2)) for s in p.sa_shares} == {
+        ("MINKEI", 0.7),
+        ("RISKA", 0.3),
+    }
