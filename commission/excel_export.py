@@ -44,13 +44,16 @@ _thin = Side(style="thin", color="D6DEEA")
 _BORDER = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
 
 # Redesigned per-SA sheet: one row per order, split into Paid vs Clearance.
+# Columns: A Order# B Date C Channel D Payment E Gross F Charge% G Charges
+#          H Net I Share% J Commission
 _SA_HEADERS = [
     "Order #", "Date", "Channel", "Payment",
-    "Gross share", "Charges", "Net share", "Share %", "Commission",
+    "Gross share", "Charge %", "Charges", "Net share", "Share %", "Commission",
 ]
-_SA_NC = len(_SA_HEADERS)  # 9 columns (A–I)
-_SA_NUM_COLS = {5, 6, 7, 9}  # money columns
-_SA_RIGHT_COLS = {5, 6, 7, 8, 9}  # right-aligned columns
+_SA_NC = len(_SA_HEADERS)  # 10 columns (A–J)
+_SA_NUM_COLS = {5, 7, 8, 10}  # money columns (Gross, Charges, Net, Commission)
+_SA_PCT_COLS = {6, 9}         # Charge %, Share %
+_SA_RIGHT_COLS = {5, 6, 7, 8, 9, 10}  # right-aligned columns
 
 
 def _write_header(ws: Worksheet, headers: Sequence[str]) -> None:
@@ -164,12 +167,16 @@ def _sa_order_data(c, order, tiers_cfg, tier_rate_pct) -> dict:
         commission = round(flat_rule.amount_per_order * c.share_pct, 2)
     else:
         commission = round(c.net_share * tier_rate_pct / 100.0, 2)
+    # Effective charge rate on this SA's gross share (blends multiple payment
+    # methods on split-payment orders). Charges in Excel = Gross × this rate.
+    charge_rate = round(charges_share / c.gross_share, 6) if c.gross_share else 0.0
     return {
         "order": c.order_number,
         "date": c.order_date.strftime("%Y-%m-%d"),
         "channel": order.channel if order else "",
         "payment": _payment_str(order),
         "gross": c.gross_share,
+        "charge_rate": charge_rate,
         "charges": charges_share,
         "net": c.net_share,
         "share": c.share_pct,
@@ -204,24 +211,25 @@ def _sa_order_row(
     ws: Worksheet, row: int, d: dict, rate: float, flat: float,
     zebra_fill: str | None, *, blank_commission: bool = False,
 ) -> None:
-    """One order line. Charges and Commission are live Excel formulas:
-    Charges = Gross − Net; Commission = Net × tier-rate (or the flat amount
-    for clearance, or blank for reference/previous-month rows)."""
+    """One order line. Charge %, Charges, Net and Commission are live formulas:
+    Charges = Gross × Charge%;  Net = Gross − Charges;
+    Commission = Net × tier-rate (flat for clearance, blank for reference)."""
     label = d["order"] + ("  ·clearance" if d["is_clr"] else "")
     ws.cell(row=row, column=1, value=label)
     ws.cell(row=row, column=2, value=d["date"])
     ws.cell(row=row, column=3, value=d["channel"])
     ws.cell(row=row, column=4, value=d["payment"])
-    ws.cell(row=row, column=5, value=d["gross"])                 # E: value
-    ws.cell(row=row, column=6, value=f"=E{row}-G{row}")          # F: charges = gross-net
-    ws.cell(row=row, column=7, value=d["net"])                   # G: value
-    ws.cell(row=row, column=8, value=d["share"])                 # H: value
+    ws.cell(row=row, column=5, value=d["gross"])                  # E: value
+    ws.cell(row=row, column=6, value=d["charge_rate"])            # F: charge % (value)
+    ws.cell(row=row, column=7, value=f"=E{row}*F{row}")           # G: charges = gross×rate
+    ws.cell(row=row, column=8, value=f"=E{row}-G{row}")           # H: net = gross−charges
+    ws.cell(row=row, column=9, value=d["share"])                  # I: share % (value)
     if blank_commission:
-        ws.cell(row=row, column=9, value=None)                   # reference row
+        ws.cell(row=row, column=10, value=None)                   # reference row
     elif d["is_clr"]:
-        ws.cell(row=row, column=9, value=f"={flat}")             # I: flat amount
+        ws.cell(row=row, column=10, value=f"={flat}")             # J: flat amount
     else:
-        ws.cell(row=row, column=9, value=f"=G{row}*{rate}/100")  # I: net × rate
+        ws.cell(row=row, column=10, value=f"=H{row}*{rate}/100")  # J: net × rate
     for col in range(1, _SA_NC + 1):
         c = ws.cell(row=row, column=col)
         c.border = _BORDER
@@ -229,7 +237,9 @@ def _sa_order_row(
             c.fill = PatternFill("solid", fgColor=zebra_fill)
         if col in _SA_NUM_COLS:
             c.number_format = _MONEY_FMT
-        elif col == 8:
+        elif col == 6:
+            c.number_format = "0.00%"
+        elif col == 9:
             c.number_format = "0%"
         if col in _SA_RIGHT_COLS:
             c.alignment = Alignment(horizontal="right")
@@ -239,7 +249,7 @@ def _sa_subtotal(
     ws: Worksheet, row: int, label: str, start: int, end: int,
     *, with_commission: bool = True,
 ) -> None:
-    """Subtotal row with =SUM() formulas over the data rows [start, end]."""
+    """Subtotal row with =SUM() formulas (Charges, Net, Commission)."""
     for col in range(1, _SA_NC + 1):
         cell = ws.cell(row=row, column=col)
         cell.fill = PatternFill("solid", fgColor=_SUBTOTAL_FILL)
@@ -248,17 +258,17 @@ def _sa_subtotal(
     lc.font = Font(bold=True, color=_INK)
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
     lc.alignment = Alignment(horizontal="right", indent=1)
-    net = f"=SUM(G{start}:G{end})" if end >= start else 0
-    nc = ws.cell(row=row, column=7, value=net)
-    nc.number_format = _MONEY_FMT
-    nc.font = Font(bold=True)
-    nc.alignment = Alignment(horizontal="right")
+
+    def _put(col: int, formula) -> None:
+        cell = ws.cell(row=row, column=col, value=formula)
+        cell.number_format = _MONEY_FMT
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal="right")
+
+    _put(7, f"=SUM(G{start}:G{end})" if end >= start else 0)   # Charges
+    _put(8, f"=SUM(H{start}:H{end})" if end >= start else 0)   # Net
     if with_commission:
-        comm = f"=SUM(I{start}:I{end})" if end >= start else 0
-        cc = ws.cell(row=row, column=9, value=comm)
-        cc.number_format = _MONEY_FMT
-        cc.font = Font(bold=True)
-        cc.alignment = Alignment(horizontal="right")
+        _put(10, f"=SUM(J{start}:J{end})" if end >= start else 0)  # Commission
 
 
 def _sa_order_table(
@@ -293,9 +303,9 @@ def _sa_bonus_table(ws: Worksheet, row: int, sa: SACommission, achieved_formula:
     specs = [
         ("Monthly sales target", sa.bonus_target, _MONEY_FMT),
         ("Sales achieved (excl. clearance)", achieved_formula, _MONEY_FMT),
-        ("Extra above target", f"=MAX(0,I{tgt_row + 1}-I{tgt_row})", _MONEY_FMT),
-        ("Tiers achieved (× RM50,000)", f"=INT(I{tgt_row + 2}/50000)", "0"),
-        ("Cash incentive (× RM500)", f"=I{tgt_row + 3}*500", _MONEY_FMT),
+        ("Extra above target", f"=MAX(0,J{tgt_row + 1}-J{tgt_row})", _MONEY_FMT),
+        ("Tiers achieved (× RM50,000)", f"=INT(J{tgt_row + 2}/50000)", "0"),
+        ("Cash incentive (× RM500)", f"=J{tgt_row + 3}*500", _MONEY_FMT),
     ]
     for i, (label, val, fmt) in enumerate(specs):
         is_cash = i == len(specs) - 1
@@ -304,16 +314,16 @@ def _sa_bonus_table(ws: Worksheet, row: int, sa: SACommission, achieved_formula:
             c.border = _BORDER
             if is_cash:
                 c.fill = PatternFill("solid", fgColor="EDE9FE")
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=9)
         lc = ws.cell(row=row, column=1, value=label)
         lc.alignment = Alignment(horizontal="right", indent=1)
         lc.font = Font(bold=is_cash, color=_INK)
-        vc = ws.cell(row=row, column=9, value=val)
+        vc = ws.cell(row=row, column=10, value=val)
         vc.number_format = fmt
         vc.alignment = Alignment(horizontal="right")
         vc.font = Font(bold=is_cash, color="6D28D9" if is_cash else _INK)
         row += 1
-    return row + 1, f"I{tgt_row + 4}"
+    return row + 1, f"J{tgt_row + 4}"
 
 
 def _build_sa_sheet(
@@ -370,8 +380,8 @@ def _build_sa_sheet(
             f"PREVIOUS-MONTH SALES PAID IN {plabel.upper()}",
             _MUTED, _ZEBRA, prev, rate, flat, "PREVIOUS-MONTH TOTAL",
         )
-        subtotal_cells.append(f"I{sub_r}")
-        t1_net_cell = f"G{sub_r}"
+        subtotal_cells.append(f"J{sub_r}")   # commission subtotal
+        t1_net_cell = f"H{sub_r}"            # net subtotal
     else:
         t1_net_cell = None
 
@@ -380,8 +390,8 @@ def _build_sa_sheet(
         ws, row, f"{plabel.upper()} SALES COMPLETED", _NAVY, _ZEBRA,
         current, rate, flat, f"{plabel.upper()} SALES TOTAL",
     )
-    subtotal_cells.append(f"I{sub_r}")
-    t2_net_cell = f"G{sub_r}"
+    subtotal_cells.append(f"J{sub_r}")
+    t2_net_cell = f"H{sub_r}"
 
     # ---- Table 3: clearance sales ------------------------------------------
     if clearance:
@@ -391,7 +401,7 @@ def _build_sa_sheet(
             f"  ·  excluded from sales total & tier",
             _GOLD, _CLR_ZEBRA, clearance, rate, flat, "CLEARANCE TOTAL",
         )
-        subtotal_cells.append(f"I{sub_r}")
+        subtotal_cells.append(f"J{sub_r}")
 
     # ---- Table 4: overachievement bonus (SAs with a scheme) ----------------
     if sa.bonus_season:
@@ -403,18 +413,18 @@ def _build_sa_sheet(
     for col in range(1, _SA_NC + 1):
         ws.cell(row=row, column=col).fill = PatternFill("solid", fgColor=_TEAL)
         ws.cell(row=row, column=col).border = _BORDER
-    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=9)
     g = ws.cell(row=row, column=1, value="TOTAL COMMISSION")
     g.font = Font(bold=True, size=12, color="FFFFFF")
     g.alignment = Alignment(horizontal="right", vertical="center", indent=1)
-    gc = ws.cell(row=row, column=9, value="=" + "+".join(subtotal_cells))
+    gc = ws.cell(row=row, column=10, value="=" + "+".join(subtotal_cells))
     gc.number_format = _MONEY_FMT
     gc.font = Font(bold=True, size=12, color="FFFFFF")
     gc.alignment = Alignment(horizontal="right")
     ws.row_dimensions[row].height = 22
 
     # ---- Column widths & freeze -------------------------------------------
-    for col, w in enumerate([18, 12, 14, 32, 14, 12, 14, 9, 14], start=1):
+    for col, w in enumerate([16, 11, 12, 30, 13, 9, 12, 13, 8, 13], start=1):
         ws.column_dimensions[get_column_letter(col)].width = w
     ws.freeze_panes = "A4"
 
