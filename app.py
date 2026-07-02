@@ -267,7 +267,7 @@ def _contribution_row(contribution, order, *, tier_rate_pct=None, tiers_cfg=None
         "Location": _detect_locations(order),
     }
     if tier_rate_pct is not None:
-        is_clearance = bool(order and order.is_clearance)
+        is_clearance = bool(order and getattr(order, "is_clearance", False))
         flat_rule = (
             tiers_cfg.flat_rule_for(order.channel)
             if (order is not None and tiers_cfg is not None)
@@ -792,12 +792,18 @@ def page_report() -> None:
                 c3.metric("Net", fmt_money(s.total_net_sales))
                 c4.metric("Commission", fmt_money(s.commission_amount))
 
-                if s.clearance_order_count:
+                # getattr guards: if a stale SACommission from a not-yet-fully-
+                # reloaded module lacks the clearance fields, degrade quietly
+                # instead of crashing the whole report.
+                clr_count = getattr(s, "clearance_order_count", 0)
+                if clr_count:
+                    clr_net = getattr(s, "clearance_net_sales", 0.0)
+                    clr_comm = getattr(s, "clearance_commission", 0.0)
                     st.caption(
-                        f"➕ {s.clearance_order_count} clearance order(s) are "
+                        f"➕ {clr_count} clearance order(s) are "
                         f"**excluded** from the sales figures above "
-                        f"({fmt_money(s.clearance_net_sales)} in sales) — they earn a "
-                        f"flat **{fmt_money(s.clearance_commission)}**, already included "
+                        f"({fmt_money(clr_net)} in sales) — they earn a "
+                        f"flat **{fmt_money(clr_comm)}**, already included "
                         f"in Commission. See the “Clearance (flat)” rows below."
                     )
 
