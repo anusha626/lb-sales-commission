@@ -242,10 +242,13 @@ def _detect_locations(order) -> str:
     return " + ".join(found)
 
 
-def _contribution_row(contribution, order) -> dict:
+def _contribution_row(contribution, order, *, tier_rate_pct=None, tiers_cfg=None) -> dict:
     """One row in the per-SA / house breakdown table.
 
     The SA's slice of the order's bank charges = order total charges × share.
+    When `tier_rate_pct` is given (SA rows), also show the actual commission
+    this order earns and a Type marker — so a clearance order visibly earns the
+    flat RM amount, not the tier %.
     """
     if order is not None:
         charges_share = round(order.total_charges * contribution.share_pct, 2)
@@ -253,7 +256,7 @@ def _contribution_row(contribution, order) -> dict:
         # Fall back to gross - net so the row stays consistent if the
         # underlying OrderResult somehow can't be looked up.
         charges_share = round(contribution.gross_share - contribution.net_share, 2)
-    return {
+    row = {
         "Order #": contribution.order_number,
         "Date": contribution.order_date.strftime("%Y-%m-%d"),
         "Share %": f"{contribution.share_pct * 100:.0f}%",
@@ -263,6 +266,25 @@ def _contribution_row(contribution, order) -> dict:
         "Payment method": _format_payment_summary(order),
         "Location": _detect_locations(order),
     }
+    if tier_rate_pct is not None:
+        is_clearance = bool(order and order.is_clearance)
+        flat_rule = (
+            tiers_cfg.flat_rule_for(order.channel)
+            if (order is not None and tiers_cfg is not None)
+            else None
+        )
+        if is_clearance and tiers_cfg is not None:
+            commission = round(tiers_cfg.clearance_flat_amount * contribution.share_pct, 2)
+            kind = "Clearance (flat)"
+        elif flat_rule is not None:
+            commission = round(flat_rule.amount_per_order * contribution.share_pct, 2)
+            kind = f"{flat_rule.label or 'Flat'} (flat)"
+        else:
+            commission = round(contribution.net_share * tier_rate_pct / 100.0, 2)
+            kind = ""
+        row["Commission"] = commission
+        row["Type"] = kind
+    return row
 
 
 def previous_month_range(today: date) -> tuple[date, date]:
@@ -772,7 +794,12 @@ def page_report() -> None:
 
                 with st.expander("Order-by-order breakdown"):
                     rows = [
-                        _contribution_row(c, orders_by_num.get(c.order_number))
+                        _contribution_row(
+                            c,
+                            orders_by_num.get(c.order_number),
+                            tier_rate_pct=s.tier_rate_pct,
+                            tiers_cfg=settings.tiers,
+                        )
                         for c in s.contributions
                     ]
                     if rows:
@@ -784,6 +811,7 @@ def page_report() -> None:
                                 "Gross share": st.column_config.NumberColumn(format="RM %.2f"),
                                 "Charges": st.column_config.NumberColumn(format="RM %.2f"),
                                 "Net share": st.column_config.NumberColumn(format="RM %.2f"),
+                                "Commission": st.column_config.NumberColumn(format="RM %.2f"),
                             },
                         )
 
