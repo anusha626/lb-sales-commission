@@ -56,6 +56,22 @@ _SA_NUM_COLS = {5, 7, 8, 10}  # money columns (Gross, Charges, Net, Commission)
 _SA_PCT_COLS = {6, 9}         # Charge %, Share %
 _SA_RIGHT_COLS = {5, 6, 7, 8, 9, 10}  # right-aligned columns
 
+# Live-tier helper cells (top-right, off the main table). L2 = the SA's sales
+# net (excl. clearance); L3 = the whole-bracket tier rate looked up from L2.
+# Commission formulas reference $L$3, so editing rows re-picks the tier.
+_TIER_NET_CELL = "L2"
+_TIER_RATE_CELL = "L3"
+_TIER_RATE_REF = "$L$3"
+
+
+def _tier_rate_formula(net_cell: str, tiers) -> str:
+    """Nested-IF whole-bracket tier lookup: returns the rate % for `net_cell`."""
+    st = sorted(tiers, key=lambda t: t.min_net)
+    formula = f"{st[0].rate_pct}"
+    for t in st[1:]:
+        formula = f"IF({net_cell}>={t.min_net:.0f},{t.rate_pct},{formula})"
+    return "=" + formula
+
 
 def _write_header(ws: Worksheet, headers: Sequence[str]) -> None:
     for col, h in enumerate(headers, start=1):
@@ -229,7 +245,9 @@ def _sa_order_row(
     elif d["is_clr"]:
         ws.cell(row=row, column=10, value=f"={flat}")             # J: flat amount
     else:
-        ws.cell(row=row, column=10, value=f"=H{row}*{rate}/100")  # J: net × rate
+        # J: net × the LIVE tier rate cell, so deleting/adding rows re-picks
+        # the bracket and the whole sheet still ties.
+        ws.cell(row=row, column=10, value=f"=H{row}*{_TIER_RATE_REF}/100")
     for col in range(1, _SA_NC + 1):
         c = ws.cell(row=row, column=col)
         c.border = _BORDER
@@ -413,8 +431,8 @@ def _build_sa_sheet(
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=_SA_NC)
     sub = ws.cell(
         row=2, column=1,
-        value=f"{plabel}     •     Tier: {sa.tier_label}     •     "
-              f"Total commission: RM{sa.commission_amount:,.2f}",
+        value=f"{plabel}     •     Figures recalculate live — add or delete order "
+              f"rows and the tier rate (top-right, cell L3) and all totals re-tie.",
     )
     sub.font = Font(size=10, italic=True, color=_MUTED)
     sub.alignment = Alignment(vertical="center", indent=1)
@@ -468,8 +486,7 @@ def _build_sa_sheet(
 
     # ---- Table 4: overachievement bonus (SAs with a scheme) ----------------
     if sa.bonus_season:
-        achieved = "=" + "+".join(c for c in [t1_net_cell, t2_net_cell] if c)
-        row, cash_cell = _sa_bonus_table(ws, row, sa, achieved)
+        row, cash_cell = _sa_bonus_table(ws, row, sa, f"={_TIER_NET_CELL}")
         subtotal_cells.append(cash_cell)
 
     # ---- Table 5: refunds / commission clawback ----------------------------
@@ -492,9 +509,24 @@ def _build_sa_sheet(
     gc.alignment = Alignment(horizontal="right")
     ws.row_dimensions[row].height = 22
 
+    # ---- Live tier helper (top-right: L2 = sales net, L3 = tier rate) -------
+    kh = ws.cell(row=1, column=11, value="LIVE TIER")
+    kh.font = Font(bold=True, size=10, color="1F4E79")
+    ws.cell(row=2, column=11, value="Net (excl. clearance)").font = Font(size=9, color=_MUTED)
+    ws.cell(row=3, column=11, value="Tier rate applied").font = Font(size=9, color=_MUTED)
+    net_refs = [c for c in [t1_net_cell, t2_net_cell] if c]
+    nc = ws.cell(row=2, column=12, value=("=" + "+".join(net_refs)) if net_refs else 0)
+    nc.number_format = _MONEY_FMT
+    nc.font = Font(bold=True)
+    rc = ws.cell(row=3, column=12, value=_tier_rate_formula(_TIER_NET_CELL, tiers_cfg.tiers))
+    rc.number_format = '0.0"%"'
+    rc.font = Font(bold=True, color="1F4E79")
+
     # ---- Column widths & freeze -------------------------------------------
     for col, w in enumerate([16, 11, 12, 30, 13, 9, 12, 13, 8, 13], start=1):
         ws.column_dimensions[get_column_letter(col)].width = w
+    ws.column_dimensions["K"].width = 20
+    ws.column_dimensions["L"].width = 12
     ws.freeze_panes = "A4"
 
 
