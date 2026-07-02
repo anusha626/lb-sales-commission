@@ -183,6 +183,13 @@ class SACommission(BaseModel):
     clearance_order_count: int = 0
     clearance_net_sales: float = 0.0
     clearance_commission: float = 0.0
+    # Overachievement bonus (per-SA scheme, e.g. MINKEI): floor((achieved -
+    # monthly target) / step) * per_step. Included in commission_amount.
+    bonus_season: str = ""          # "Peak" / "Non-peak" / "" (no scheme)
+    bonus_target: float = 0.0
+    bonus_achieved: float = 0.0
+    bonus_tiers: int = 0
+    bonus_amount: float = 0.0
 
 
 class HouseSalesSummary(BaseModel):

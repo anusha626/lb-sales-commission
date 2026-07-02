@@ -28,6 +28,57 @@ from .parser import HOUSE_ACCOUNT
 from .settings import ChannelFlatRule, TiersConfig
 
 
+# ---------------------------------------------------------------------------
+# Overachievement bonus (per-SA, month-season dependent). MINKEI only for now;
+# move to settings if more SAs get a scheme.
+# ---------------------------------------------------------------------------
+_PEAK_MONTHS = {1, 2, 3, 9, 10, 11, 12}  # Jan-Mar, Sep-Dec
+OVERACHIEVEMENT_SCHEMES: dict[str, dict] = {
+    "MINKEI": {
+        "non_peak_target": 280000.0,
+        "peak_target": 380000.0,
+        "step": 50000.0,   # every RM50,000 over target...
+        "per_step": 500.0,  # ...earns RM500
+    },
+}
+
+
+def overachievement_bonus(sa_name: str, month: int | None, achieved: float) -> dict | None:
+    """Bonus = floor(max(0, achieved - target) / step) * per_step, where the
+    target depends on the month's season. None if the SA has no scheme."""
+    cfg = OVERACHIEVEMENT_SCHEMES.get((sa_name or "").upper())
+    if cfg is None or not month:
+        return None
+    peak = month in _PEAK_MONTHS
+    target = cfg["peak_target"] if peak else cfg["non_peak_target"]
+    extra = max(0.0, round(achieved - target, 2))
+    tiers = int(extra // cfg["step"])
+    return {
+        "season": "Peak" if peak else "Non-peak",
+        "target": target,
+        "extra": extra,
+        "tiers": tiers,
+        "amount": round(tiers * cfg["per_step"], 2),
+    }
+
+
+def apply_overachievement_bonuses(report: CommissionReport, month: int | None) -> CommissionReport:
+    """Fold each SA's overachievement bonus (on their monthly net sales) into
+    commission_amount and record the breakdown. Call after compute_commissions
+    with the payout month."""
+    for s in report.sa_summaries:
+        b = overachievement_bonus(s.sa_name, month, s.total_net_sales)
+        if b is None:
+            continue
+        s.bonus_season = b["season"]
+        s.bonus_target = b["target"]
+        s.bonus_achieved = s.total_net_sales
+        s.bonus_tiers = b["tiers"]
+        s.bonus_amount = b["amount"]
+        s.commission_amount = round(s.commission_amount + b["amount"], 2)
+    return report
+
+
 def _tier_for(net: float, tiers: list[CommissionTier]) -> tuple[CommissionTier, str]:
     """Return the tier whose [min_net, max_net] bracket contains `net`,
     plus a human label describing it."""

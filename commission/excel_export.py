@@ -200,14 +200,30 @@ def _sa_theader(ws: Worksheet, row: int) -> None:
     ws.row_dimensions[row].height = 18
 
 
-def _sa_order_row(ws: Worksheet, row: int, d: dict, zebra_fill: str | None) -> None:
+def _sa_order_row(
+    ws: Worksheet, row: int, d: dict, rate: float, flat: float,
+    zebra_fill: str | None, *, blank_commission: bool = False,
+) -> None:
+    """One order line. Charges and Commission are live Excel formulas:
+    Charges = Gross − Net; Commission = Net × tier-rate (or the flat amount
+    for clearance, or blank for reference/previous-month rows)."""
     label = d["order"] + ("  ·clearance" if d["is_clr"] else "")
-    vals = [
-        label, d["date"], d["channel"], d["payment"],
-        d["gross"], d["charges"], d["net"], d["share"], d["commission"],
-    ]
-    for col, v in enumerate(vals, start=1):
-        c = ws.cell(row=row, column=col, value=v)
+    ws.cell(row=row, column=1, value=label)
+    ws.cell(row=row, column=2, value=d["date"])
+    ws.cell(row=row, column=3, value=d["channel"])
+    ws.cell(row=row, column=4, value=d["payment"])
+    ws.cell(row=row, column=5, value=d["gross"])                 # E: value
+    ws.cell(row=row, column=6, value=f"=E{row}-G{row}")          # F: charges = gross-net
+    ws.cell(row=row, column=7, value=d["net"])                   # G: value
+    ws.cell(row=row, column=8, value=d["share"])                 # H: value
+    if blank_commission:
+        ws.cell(row=row, column=9, value=None)                   # reference row
+    elif d["is_clr"]:
+        ws.cell(row=row, column=9, value=f"={flat}")             # I: flat amount
+    else:
+        ws.cell(row=row, column=9, value=f"=G{row}*{rate}/100")  # I: net × rate
+    for col in range(1, _SA_NC + 1):
+        c = ws.cell(row=row, column=col)
         c.border = _BORDER
         if zebra_fill:
             c.fill = PatternFill("solid", fgColor=zebra_fill)
@@ -219,7 +235,11 @@ def _sa_order_row(ws: Worksheet, row: int, d: dict, zebra_fill: str | None) -> N
             c.alignment = Alignment(horizontal="right")
 
 
-def _sa_subtotal(ws: Worksheet, row: int, label: str, net, commission) -> None:
+def _sa_subtotal(
+    ws: Worksheet, row: int, label: str, start: int, end: int,
+    *, with_commission: bool = True,
+) -> None:
+    """Subtotal row with =SUM() formulas over the data rows [start, end]."""
     for col in range(1, _SA_NC + 1):
         cell = ws.cell(row=row, column=col)
         cell.fill = PatternFill("solid", fgColor=_SUBTOTAL_FILL)
@@ -228,14 +248,72 @@ def _sa_subtotal(ws: Worksheet, row: int, label: str, net, commission) -> None:
     lc.font = Font(bold=True, color=_INK)
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
     lc.alignment = Alignment(horizontal="right", indent=1)
+    net = f"=SUM(G{start}:G{end})" if end >= start else 0
     nc = ws.cell(row=row, column=7, value=net)
     nc.number_format = _MONEY_FMT
     nc.font = Font(bold=True)
     nc.alignment = Alignment(horizontal="right")
-    cc = ws.cell(row=row, column=9, value=commission)
-    cc.number_format = _MONEY_FMT
-    cc.font = Font(bold=True)
-    cc.alignment = Alignment(horizontal="right")
+    if with_commission:
+        comm = f"=SUM(I{start}:I{end})" if end >= start else 0
+        cc = ws.cell(row=row, column=9, value=comm)
+        cc.number_format = _MONEY_FMT
+        cc.font = Font(bold=True)
+        cc.alignment = Alignment(horizontal="right")
+
+
+def _sa_order_table(
+    ws: Worksheet, row: int, section: str, section_fill: str, zebra: str,
+    data: list[dict], rate: float, flat: float, label: str,
+) -> tuple[int, int]:
+    """Render a section header + table of orders + subtotal. Returns
+    (next_row, subtotal_row)."""
+    _sa_section(ws, row, section, section_fill)
+    row += 1
+    _sa_theader(ws, row)
+    row += 1
+    start = row
+    for i, d in enumerate(data):
+        _sa_order_row(ws, row, d, rate, flat, zebra if i % 2 else None)
+        row += 1
+    _sa_subtotal(ws, row, label, start, row - 1)
+    return row + 2, row
+
+
+def _sa_bonus_table(ws: Worksheet, row: int, sa: SACommission, achieved_formula: str) -> tuple[int, str]:
+    """Overachievement-bonus summary with live formulas. Returns
+    (next_row, cash_incentive_cell)."""
+    _sa_section(
+        ws, row,
+        f"OVERACHIEVEMENT BONUS  ·  {sa.bonus_season} season"
+        f"  ·  RM500 per full RM50,000 over target",
+        "6D28D9",
+    )
+    row += 1
+    tgt_row = row
+    specs = [
+        ("Monthly sales target", sa.bonus_target, _MONEY_FMT),
+        ("Sales achieved (excl. clearance)", achieved_formula, _MONEY_FMT),
+        ("Extra above target", f"=MAX(0,I{tgt_row + 1}-I{tgt_row})", _MONEY_FMT),
+        ("Tiers achieved (× RM50,000)", f"=INT(I{tgt_row + 2}/50000)", "0"),
+        ("Cash incentive (× RM500)", f"=I{tgt_row + 3}*500", _MONEY_FMT),
+    ]
+    for i, (label, val, fmt) in enumerate(specs):
+        is_cash = i == len(specs) - 1
+        for col in range(1, _SA_NC + 1):
+            c = ws.cell(row=row, column=col)
+            c.border = _BORDER
+            if is_cash:
+                c.fill = PatternFill("solid", fgColor="EDE9FE")
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+        lc = ws.cell(row=row, column=1, value=label)
+        lc.alignment = Alignment(horizontal="right", indent=1)
+        lc.font = Font(bold=is_cash, color=_INK)
+        vc = ws.cell(row=row, column=9, value=val)
+        vc.number_format = fmt
+        vc.alignment = Alignment(horizontal="right")
+        vc.font = Font(bold=is_cash, color="6D28D9" if is_cash else _INK)
+        row += 1
+    return row + 1, f"I{tgt_row + 4}"
 
 
 def _build_sa_sheet(
@@ -243,9 +321,15 @@ def _build_sa_sheet(
     sa: SACommission,
     orders_by_number: dict[str, OrderResult],
     tiers_cfg: TiersConfig,
+    *,
+    payout_month: str | None = None,
+    payout_label: str | None = None,
 ) -> None:
     ws.title = f"SA - {sa.sa_name}"[:31]  # Excel sheet name limit
     ws.sheet_view.showGridLines = False
+    rate = sa.tier_rate_pct
+    flat = tiers_cfg.clearance_flat_amount
+    plabel = payout_label or "current month"
 
     # ---- Title block -------------------------------------------------------
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=_SA_NC)
@@ -256,61 +340,66 @@ def _build_sa_sheet(
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=_SA_NC)
     sub = ws.cell(
         row=2, column=1,
-        value=f"Tier: {sa.tier_label}     •     Total commission: "
-              f"RM{sa.commission_amount:,.2f}",
+        value=f"{plabel}     •     Tier: {sa.tier_label}     •     "
+              f"Total commission: RM{sa.commission_amount:,.2f}",
     )
     sub.font = Font(size=10, italic=True, color=_MUTED)
     sub.alignment = Alignment(vertical="center", indent=1)
 
-    # ---- Split into paid vs clearance --------------------------------------
+    # ---- Classify orders ---------------------------------------------------
     rows = [
-        _sa_order_data(c, orders_by_number.get(c.order_number), tiers_cfg, sa.tier_rate_pct)
+        _sa_order_data(c, orders_by_number.get(c.order_number), tiers_cfg, rate)
         for c in sorted(sa.contributions, key=lambda c: c.order_date)
     ]
-    paid = [d for d in rows if not d["is_clr"]]
     clearance = [d for d in rows if d["is_clr"]]
+    non_clr = [d for d in rows if not d["is_clr"]]
+    # Split paid orders by when they were ORDERED vs the payout month.
+    if payout_month:
+        prev = [d for d in non_clr if d["date"][:7] < payout_month]
+        current = [d for d in non_clr if d["date"][:7] >= payout_month]
+    else:
+        prev, current = [], non_clr
 
     row = 4
-    # ---- PAID SALES table --------------------------------------------------
-    _sa_section(ws, row, "PAID SALES", _NAVY)
-    row += 1
-    _sa_theader(ws, row)
-    row += 1
-    for i, d in enumerate(paid):
-        _sa_order_row(ws, row, d, _ZEBRA if i % 2 else None)
-        row += 1
-    # Use the authoritative SACommission figures for subtotals so the two
-    # tables + grand total reconcile exactly (summing per-order rounded values
-    # would drift a few cents across many rows).
-    _sa_subtotal(
-        ws, row, "PAID SALES TOTAL",
-        sa.total_net_sales,
-        round(sa.commission_amount - sa.clearance_commission, 2),
-    )
-    row += 2
+    subtotal_cells: list[str] = []  # commission subtotal cells to sum
 
-    # ---- CLEARANCE SALES table (only if any) -------------------------------
-    if clearance:
-        _sa_section(
+    # ---- Table 1: previous-month sales paid in current month ---------------
+    if prev:
+        row, sub_r = _sa_order_table(
             ws, row,
-            f"CLEARANCE SALES  ·  flat RM{tiers_cfg.clearance_flat_amount:,.0f} per order"
-            f"  ·  excluded from sales total & tier",
-            _GOLD,
+            f"PREVIOUS-MONTH SALES PAID IN {plabel.upper()}",
+            _MUTED, _ZEBRA, prev, rate, flat, "PREVIOUS-MONTH TOTAL",
         )
-        row += 1
-        _sa_theader(ws, row)
-        row += 1
-        for i, d in enumerate(clearance):
-            _sa_order_row(ws, row, d, _CLR_ZEBRA if i % 2 else None)
-            row += 1
-        _sa_subtotal(
-            ws, row, "CLEARANCE TOTAL",
-            sa.clearance_net_sales,
-            sa.clearance_commission,
-        )
-        row += 2
+        subtotal_cells.append(f"I{sub_r}")
+        t1_net_cell = f"G{sub_r}"
+    else:
+        t1_net_cell = None
 
-    # ---- Grand total commission -------------------------------------------
+    # ---- Table 2: current-month sales completed ----------------------------
+    row, sub_r = _sa_order_table(
+        ws, row, f"{plabel.upper()} SALES COMPLETED", _NAVY, _ZEBRA,
+        current, rate, flat, f"{plabel.upper()} SALES TOTAL",
+    )
+    subtotal_cells.append(f"I{sub_r}")
+    t2_net_cell = f"G{sub_r}"
+
+    # ---- Table 3: clearance sales ------------------------------------------
+    if clearance:
+        row, sub_r = _sa_order_table(
+            ws, row,
+            f"CLEARANCE SALES  ·  flat RM{flat:,.0f} per order"
+            f"  ·  excluded from sales total & tier",
+            _GOLD, _CLR_ZEBRA, clearance, rate, flat, "CLEARANCE TOTAL",
+        )
+        subtotal_cells.append(f"I{sub_r}")
+
+    # ---- Table 4: overachievement bonus (SAs with a scheme) ----------------
+    if sa.bonus_season:
+        achieved = "=" + "+".join(c for c in [t1_net_cell, t2_net_cell] if c)
+        row, cash_cell = _sa_bonus_table(ws, row, sa, achieved)
+        subtotal_cells.append(cash_cell)
+
+    # ---- Grand total commission (sum of all tables' commission) ------------
     for col in range(1, _SA_NC + 1):
         ws.cell(row=row, column=col).fill = PatternFill("solid", fgColor=_TEAL)
         ws.cell(row=row, column=col).border = _BORDER
@@ -318,14 +407,14 @@ def _build_sa_sheet(
     g = ws.cell(row=row, column=1, value="TOTAL COMMISSION")
     g.font = Font(bold=True, size=12, color="FFFFFF")
     g.alignment = Alignment(horizontal="right", vertical="center", indent=1)
-    gc = ws.cell(row=row, column=9, value=sa.commission_amount)
+    gc = ws.cell(row=row, column=9, value="=" + "+".join(subtotal_cells))
     gc.number_format = _MONEY_FMT
     gc.font = Font(bold=True, size=12, color="FFFFFF")
     gc.alignment = Alignment(horizontal="right")
     ws.row_dimensions[row].height = 22
 
     # ---- Column widths & freeze -------------------------------------------
-    for col, w in enumerate([16, 12, 14, 32, 14, 12, 14, 9, 14], start=1):
+    for col, w in enumerate([18, 12, 14, 32, 14, 12, 14, 9, 14], start=1):
         ws.column_dimensions[get_column_letter(col)].width = w
     ws.freeze_panes = "A4"
 
@@ -471,8 +560,15 @@ def build_workbook(
     orders: list[OrderResult],
     report: CommissionReport,
     settings: AppSettings,
+    *,
+    payout_month: str | None = None,
+    payout_label: str | None = None,
 ) -> bytes:
-    """Render the full report and return raw .xlsx bytes."""
+    """Render the full report and return raw .xlsx bytes.
+
+    `payout_month` (e.g. "2026-06") splits each SA's orders into
+    previous-month-ordered vs current-month-ordered tables.
+    """
     wb = Workbook()
     summary_ws = wb.active
     _build_summary_sheet(summary_ws, report.sa_summaries, report.house)
@@ -480,7 +576,10 @@ def build_workbook(
     by_number = {o.order_number: o for o in orders}
     for s in report.sa_summaries:
         ws = wb.create_sheet()
-        _build_sa_sheet(ws, s, by_number, settings.tiers)
+        _build_sa_sheet(
+            ws, s, by_number, settings.tiers,
+            payout_month=payout_month, payout_label=payout_label,
+        )
 
     if report.house:
         _build_house_sheet(wb.create_sheet(), report.house, by_number)

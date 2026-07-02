@@ -17,7 +17,10 @@ import streamlit as st
 from pathlib import Path
 
 from commission.aggregator import build_order_results, read_easystore_csv
-from commission.commission_engine import compute_commissions
+from commission.commission_engine import (
+    apply_overachievement_bonuses,
+    compute_commissions,
+)
 from commission.excel_export import build_workbook
 from commission.github_sync import GitHubConfig, push_local_path
 from commission.models import (
@@ -724,6 +727,9 @@ def page_report() -> None:
         _render_settlement_entry(awaiting, settle_overrides)
 
     report = compute_commissions(month_orders, settings.tiers)
+    # Fold in per-SA overachievement bonuses (e.g. MINKEI) for the payout month.
+    if sel_month:
+        apply_overachievement_bonuses(report, int(sel_month.split("-")[1]))
     summaries = report.sa_summaries
     house = report.house
 
@@ -749,7 +755,11 @@ def page_report() -> None:
     # Build the all-in-one workbook once (summary + one tab per SA + house +
     # review + excluded + settings) and offer it right here, so the whole
     # team's commission downloads as ONE Excel without scrolling past every SA.
-    xlsx = build_workbook(month_orders, report, settings)
+    xlsx = build_workbook(
+        month_orders, report, settings,
+        payout_month=sel_month,
+        payout_label=_month_label(sel_month) if sel_month else None,
+    )
     month_tag = sel_month or datetime.now().strftime("%Y%m")
     xlsx_name = f"commission_report_{month_tag}.xlsx"
     st.download_button(
@@ -805,6 +815,14 @@ def page_report() -> None:
                         f"({fmt_money(clr_net)} in sales) — they earn a "
                         f"flat **{fmt_money(clr_comm)}**, already included "
                         f"in Commission. See the “Clearance (flat)” rows below."
+                    )
+
+                if getattr(s, "bonus_season", "") and getattr(s, "bonus_amount", 0.0):
+                    st.caption(
+                        f"🎯 Overachievement bonus ({s.bonus_season} season): net "
+                        f"{fmt_money(s.total_net_sales)} vs target "
+                        f"{fmt_money(s.bonus_target)} → **{s.bonus_tiers} tier(s)** "
+                        f"= **{fmt_money(s.bonus_amount)}**, included in Commission."
                     )
 
                 with st.expander("Order-by-order breakdown"):

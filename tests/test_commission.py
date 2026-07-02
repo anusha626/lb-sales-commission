@@ -277,3 +277,32 @@ def test_clearance_excluded_from_total_sales():
     assert m.commission_amount == round(10000 * 0.008 + 10.0, 2)
     # Report-level totals also exclude clearance sales
     assert report.total_sa_net == 10000.0
+
+
+# ---------------------------------------------------------------------------
+# Overachievement bonus (MINKEI scheme)
+# ---------------------------------------------------------------------------
+from commission.commission_engine import (  # noqa: E402
+    apply_overachievement_bonuses,
+    overachievement_bonus,
+)
+
+
+def test_overachievement_matches_letter_examples():
+    assert overachievement_bonus("MINKEI", 6, 330000)["amount"] == 500.0   # non-peak
+    assert overachievement_bonus("MINKEI", 1, 430000)["amount"] == 500.0   # peak
+    assert overachievement_bonus("MINKEI", 6, 430000)["amount"] == 1500.0  # 3 tiers
+    assert overachievement_bonus("MINKEI", 6, 279999)["amount"] == 0.0     # below target
+    assert overachievement_bonus("LILY", 6, 900000) is None                # no scheme
+
+
+def test_bonus_folded_into_commission():
+    orders = [_make_order(order_number="#1", sa_shares=[("MINKEI", 1.0)], gross=330000.0)]
+    report = compute_commissions(orders, _default_tiers())
+    apply_overachievement_bonuses(report, 6)  # June = non-peak, target 280k
+    m = report.sa_summaries[0]
+    assert m.bonus_season == "Non-peak"
+    assert m.bonus_tiers == 1
+    assert m.bonus_amount == 500.0
+    # tier commission (330k @ 1.0%) + RM500 bonus
+    assert m.commission_amount == round(330000 * 0.01 + 500.0, 2)
