@@ -675,13 +675,16 @@ def build_workbook(
     payout_month: str | None = None,
     payout_label: str | None = None,
     refunded_orders: list[OrderResult] | None = None,
+    all_orders: list[OrderResult] | None = None,
 ) -> bytes:
     """Render the full report and return raw .xlsx bytes.
 
-    `payout_month` (e.g. "2026-06") splits each SA's orders into
-    previous-month-ordered vs current-month-ordered tables. `refunded_orders`
-    are listed per SA in a manual-entry clawback table.
+    `orders` are the payout-month's kept orders (used for the SA sheets).
+    `all_orders` is the full uploaded set — used for the Review and Excluded
+    sheets so held-back orders (COD/unpaid/refunded) are visible and never
+    silently disappear. Defaults to `orders` if not given.
     """
+    audit = all_orders if all_orders is not None else orders
     wb = Workbook()
     summary_ws = wb.active
     _build_summary_sheet(summary_ws, report.sa_summaries, report.house)
@@ -706,8 +709,8 @@ def build_workbook(
     if report.house:
         _build_house_sheet(wb.create_sheet(), report.house, by_number)
 
-    _build_review_sheet(wb.create_sheet(), orders)
-    _build_excluded_sheet(wb.create_sheet(), orders)
+    _build_review_sheet(wb.create_sheet(), audit)
+    _build_excluded_sheet(wb.create_sheet(), audit)
     _build_settings_sheet(wb.create_sheet(), settings)
 
     buf = BytesIO()

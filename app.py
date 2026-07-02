@@ -760,6 +760,7 @@ def page_report() -> None:
         payout_month=sel_month,
         payout_label=_month_label(sel_month) if sel_month else None,
         refunded_orders=refunded_orders,
+        all_orders=orders,  # full set → Review/Excluded tabs stay complete
     )
     month_tag = sel_month or datetime.now().strftime("%Y%m")
     xlsx_name = f"commission_report_{month_tag}.xlsx"
