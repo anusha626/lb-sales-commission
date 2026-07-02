@@ -485,16 +485,38 @@ def _build_sa_sheet(
         subtotal_cells.append(f"J{sub_r}")
 
     # ---- Table 4: overachievement bonus (SAs with a scheme) ----------------
+    bonus_cell = None
     if sa.bonus_season:
-        row, cash_cell = _sa_bonus_table(ws, row, sa, f"={_TIER_NET_CELL}")
-        subtotal_cells.append(cash_cell)
+        row, bonus_cell = _sa_bonus_table(ws, row, sa, f"={_TIER_NET_CELL}")
 
     # ---- Table 5: refunds / commission clawback ----------------------------
     clawback_cell = None
     if refunds:
         row, clawback_cell = _sa_refund_table(ws, row, refunds)
 
-    # ---- Grand total commission (all tables, minus any clawback) -----------
+    # Commission before bonus = tier + clearance commissions (+ any clawback).
+    before_formula = "=" + "+".join(subtotal_cells) + (f"+{clawback_cell}" if clawback_cell else "")
+
+    # ---- "Before bonus" line (only when there's a bonus to add on top) ------
+    if bonus_cell:
+        for col in range(1, _SA_NC + 1):
+            c = ws.cell(row=row, column=col)
+            c.fill = PatternFill("solid", fgColor="D6E4E1")
+            c.border = _BORDER
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=9)
+        lbl = ws.cell(row=row, column=1, value="Commission before overachievement bonus")
+        lbl.font = Font(bold=True, color=_INK)
+        lbl.alignment = Alignment(horizontal="right", indent=1)
+        bcell = ws.cell(row=row, column=10, value=before_formula)
+        bcell.number_format = _MONEY_FMT
+        bcell.font = Font(bold=True)
+        bcell.alignment = Alignment(horizontal="right")
+        grand = f"=J{row}+{bonus_cell}"
+        row += 1
+    else:
+        grand = before_formula
+
+    # ---- Grand total commission -------------------------------------------
     for col in range(1, _SA_NC + 1):
         ws.cell(row=row, column=col).fill = PatternFill("solid", fgColor=_TEAL)
         ws.cell(row=row, column=col).border = _BORDER
@@ -502,7 +524,6 @@ def _build_sa_sheet(
     g = ws.cell(row=row, column=1, value="TOTAL COMMISSION")
     g.font = Font(bold=True, size=12, color="FFFFFF")
     g.alignment = Alignment(horizontal="right", vertical="center", indent=1)
-    grand = "=" + "+".join(subtotal_cells) + (f"+{clawback_cell}" if clawback_cell else "")
     gc = ws.cell(row=row, column=10, value=grand)
     gc.number_format = _MONEY_FMT
     gc.font = Font(bold=True, size=12, color="FFFFFF")
