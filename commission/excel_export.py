@@ -155,12 +155,11 @@ def _payment_str(order: OrderResult | None) -> str:
 
 
 def _sa_order_data(c, order, tiers_cfg, tier_rate_pct) -> dict:
-    """One order line for the SA sheet, with the real per-order commission."""
-    if order is not None:
-        charges_share = round(order.total_charges * c.share_pct, 2)
-    else:
-        charges_share = round(c.gross_share - c.net_share, 2)
-    is_clr = bool(order and getattr(order, "is_clearance", False))
+    """One order line for the SA sheet, with the real per-order commission.
+    A partially-clearance order arrives as two contributions (normal +
+    clearance); charges come from this portion's gross − net."""
+    charges_share = round(c.gross_share - c.net_share, 2)
+    is_clr = getattr(c, "is_clearance", False)
     flat_rule = tiers_cfg.flat_rule_for(order.channel) if order is not None else None
     if is_clr:
         commission = round(tiers_cfg.clearance_flat_amount * c.share_pct, 2)

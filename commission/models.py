@@ -112,6 +112,10 @@ class OrderResult(BaseModel):
     # Clearance-stock order (seller note carried the clearance tag) — earns a
     # flat commission and is left out of the tier-determining monthly net.
     is_clearance: bool = False
+    # Gross amount of this order that is clearance stock. 0 = none;
+    # == gross_total = fully clearance; in between = partial (the note said
+    # e.g. "SALES JUNE 2026 FOR ITEM AMOUNT RM799").
+    clearance_amount: float = 0.0
     channel: str
     financial_status: str
     order_status: str
@@ -147,7 +151,8 @@ class OrderResult(BaseModel):
 
 
 class SAContribution(BaseModel):
-    """One SA's net contribution from one order."""
+    """One SA's net contribution from one order (or one portion of it — a
+    partially-clearance order produces a normal and a clearance contribution)."""
 
     sa_name: str
     order_number: str
@@ -155,6 +160,7 @@ class SAContribution(BaseModel):
     gross_share: float
     net_share: float
     share_pct: float  # 0..1
+    is_clearance: bool = False
 
 
 class CommissionTier(BaseModel):

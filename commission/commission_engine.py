@@ -109,17 +109,31 @@ def build_contributions(orders: list[OrderResult]) -> list[SAContribution]:
     for o in orders:
         if o.excluded:
             continue
+        # Fraction of the order that is clearance stock (0 = none, 1 = fully).
+        ca = getattr(o, "clearance_amount", 0.0) or 0.0
+        if o.gross_total > 0:
+            cf = min(1.0, ca / o.gross_total)
+        else:
+            cf = 1.0 if ca > 0 else 0.0
+        if cf <= 0:
+            parts = [(1.0, False)]           # all normal
+        elif cf >= 1.0:
+            parts = [(1.0, True)]            # all clearance
+        else:
+            parts = [(1.0 - cf, False), (cf, True)]  # split
         for share in o.parsed.sa_shares:
-            out.append(
-                SAContribution(
-                    sa_name=share.name,
-                    order_number=o.order_number,
-                    order_date=o.order_date,
-                    gross_share=round(o.gross_total * share.share, 2),
-                    net_share=round(o.net_total * share.share, 2),
-                    share_pct=share.share,
+            for frac, is_clr in parts:
+                out.append(
+                    SAContribution(
+                        sa_name=share.name,
+                        order_number=o.order_number,
+                        order_date=o.order_date,
+                        gross_share=round(o.gross_total * frac * share.share, 2),
+                        net_share=round(o.net_total * frac * share.share, 2),
+                        share_pct=share.share,
+                        is_clearance=is_clr,
+                    )
                 )
-            )
     return out
 
 
@@ -161,15 +175,12 @@ def compute_commissions(
             house_contribs.extend(sa_contribs)
             continue
 
-        def _is_clearance(c: SAContribution) -> bool:
-            o = by_number.get(c.order_number)
-            return bool(o and o.is_clearance)
-
-        # Clearance-stock orders are a separate flat-rate bucket: they are kept
-        # OUT of the SA's sales totals (gross, net, order count, average) and
-        # out of the tier — they only earn the flat amount.
-        normal = [c for c in sa_contribs if not _is_clearance(c)]
-        clearance = [c for c in sa_contribs if _is_clearance(c)]
+        # Clearance-stock orders (or the clearance portion of a partially-
+        # clearance order) are a separate flat-rate bucket: kept OUT of the
+        # SA's sales totals (gross, net, order count, average) and out of the
+        # tier — they only earn the flat amount.
+        normal = [c for c in sa_contribs if not c.is_clearance]
+        clearance = [c for c in sa_contribs if c.is_clearance]
 
         total_gross = round(sum(c.gross_share for c in normal), 2)
         total_net = round(sum(c.net_share for c in normal), 2)

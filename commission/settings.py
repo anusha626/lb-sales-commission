@@ -95,6 +95,21 @@ class TiersConfig(BaseModel):
         pattern = r"\b" + r"\s+".join(re.escape(w) for w in tag.split())
         return re.search(pattern, (note or "").upper()) is not None
 
+    def clearance_amount_from_note(self, note: str, order_total: float) -> float:
+        """Gross amount of the order that is clearance. 0 if no clearance tag;
+        the amount after "... AMOUNT RM<n>" for a partial clearance (e.g.
+        "SALES JUNE 2026 FOR ITEM AMOUNT RM799"); otherwise the whole order."""
+        if not self.is_clearance_note(note):
+            return 0.0
+        m = re.search(r"AMOUNT\s+RM\s?([\d,]+(?:\.\d+)?)", (note or "").upper())
+        if m:
+            try:
+                amt = float(m.group(1).replace(",", ""))
+                return min(amt, order_total) if order_total else amt
+            except ValueError:
+                pass
+        return order_total  # whole order is clearance
+
 
 def load_tiers(path: Path = TIERS_FILE) -> TiersConfig:
     return TiersConfig.model_validate_json(path.read_text(encoding="utf-8"))

@@ -253,12 +253,9 @@ def _contribution_row(contribution, order, *, tier_rate_pct=None, tiers_cfg=None
     this order earns and a Type marker — so a clearance order visibly earns the
     flat RM amount, not the tier %.
     """
-    if order is not None:
-        charges_share = round(order.total_charges * contribution.share_pct, 2)
-    else:
-        # Fall back to gross - net so the row stays consistent if the
-        # underlying OrderResult somehow can't be looked up.
-        charges_share = round(contribution.gross_share - contribution.net_share, 2)
+    # Charges from this contribution's own gross − net, so a partially-clearance
+    # order's normal and clearance portions each show the right charge.
+    charges_share = round(contribution.gross_share - contribution.net_share, 2)
     row = {
         "Order #": contribution.order_number,
         "Date": contribution.order_date.strftime("%Y-%m-%d"),
@@ -270,7 +267,7 @@ def _contribution_row(contribution, order, *, tier_rate_pct=None, tiers_cfg=None
         "Location": _detect_locations(order),
     }
     if tier_rate_pct is not None:
-        is_clearance = bool(order and getattr(order, "is_clearance", False))
+        is_clearance = getattr(contribution, "is_clearance", False)
         flat_rule = (
             tiers_cfg.flat_rule_for(order.channel)
             if (order is not None and tiers_cfg is not None)

@@ -203,9 +203,9 @@ def build_order_results(
         if note_paid is not None:
             settlement_date = note_paid
 
-        is_clearance = settings.tiers.is_clearance_note(note_text)
-
         gross = _parse_total(row["Total Amount"])
+        clearance_amount = settings.tiers.clearance_amount_from_note(note_text, gross)
+        is_clearance = clearance_amount >= gross > 0  # fully clearance
         channel = row.get("Channel", "") or ""
         order_status = row.get("Order Status", "") or ""
         financial_status = row.get("Financial Status", "") or ""
@@ -232,6 +232,7 @@ def build_order_results(
                     order_date=order_date,
                     settlement_date=settlement_date,
                     is_clearance=is_clearance,
+                    clearance_amount=clearance_amount,
                     channel=channel,
                     financial_status=financial_status,
                     order_status=order_status,
@@ -263,6 +264,7 @@ def build_order_results(
                 order_date=order_date,
                 settlement_date=settlement_date,
                 is_clearance=is_clearance,
+                clearance_amount=clearance_amount,
                 channel=channel,
                 financial_status=financial_status,
                 order_status=order_status,

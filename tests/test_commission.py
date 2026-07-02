@@ -31,6 +31,7 @@ def _make_order(
         order_number=order_number,
         order_date=date or datetime(2026, 5, 1),
         is_clearance=is_clearance,
+        clearance_amount=gross if is_clearance else 0.0,
         channel=channel,
         financial_status="Paid",
         order_status="Open",
@@ -306,3 +307,20 @@ def test_bonus_folded_into_commission():
     assert m.bonus_amount == 500.0
     # tier commission (330k @ 1.0%) + RM500 bonus
     assert m.commission_amount == round(330000 * 0.01 + 500.0, 2)
+
+
+def test_partial_clearance_order_split():
+    """An order that is part normal + part clearance (e.g. #10052: RM490
+    normal + RM799 clearance in a RM1289 order) splits: the normal portion
+    earns tier %, the clearance portion earns the flat RM10."""
+    o = _make_order(order_number="#10052", sa_shares=[("MINKEI", 1.0)], gross=1289.0)
+    o.clearance_amount = 799.0          # partial clearance
+    o.is_clearance = False
+    report = compute_commissions([o], _default_tiers())
+    m = report.sa_summaries[0]
+    # Sales total = only the RM490 normal portion
+    assert m.total_net_sales == 490.0
+    assert m.clearance_net_sales == 799.0
+    assert m.clearance_order_count == 1
+    # Commission = 490 × 0.8% (tier) + RM10 flat clearance
+    assert m.commission_amount == round(490 * 0.008 + 10.0, 2)
