@@ -110,37 +110,37 @@ def compute_commissions(
             house_contribs.extend(sa_contribs)
             continue
 
-        total_gross = round(sum(c.gross_share for c in sa_contribs), 2)
-        total_net = round(sum(c.net_share for c in sa_contribs), 2)
-        order_count = len(sa_contribs)
-        avg = round(total_gross / order_count, 2) if order_count else 0.0
-
         def _is_clearance(c: SAContribution) -> bool:
             o = by_number.get(c.order_number)
             return bool(o and o.is_clearance)
 
-        # Clearance-stock sales earn a flat amount and must NOT inflate the tier
-        # the SA earns on their normal sales, so the bracket is picked on
-        # non-clearance net only.
-        tier_net = round(sum(c.net_share for c in sa_contribs if not _is_clearance(c)), 2)
-        tier, tier_label = _tier_for(tier_net, tiers_cfg.tiers)
-        if any(_is_clearance(c) for c in sa_contribs):
-            tier_label += f"  ·  tier on RM{tier_net:,.0f} (clearance excluded)"
+        # Clearance-stock orders are a separate flat-rate bucket: they are kept
+        # OUT of the SA's sales totals (gross, net, order count, average) and
+        # out of the tier — they only earn the flat amount.
+        normal = [c for c in sa_contribs if not _is_clearance(c)]
+        clearance = [c for c in sa_contribs if _is_clearance(c)]
 
-        # Walk contributions: clearance orders and flat-rule channels (e.g.
-        # TikTok) earn the flat amount (split by share); other orders earn
-        # share * tier_rate.
-        commission_amount = 0.0
-        for c in sa_contribs:
+        total_gross = round(sum(c.gross_share for c in normal), 2)
+        total_net = round(sum(c.net_share for c in normal), 2)
+        order_count = len(normal)
+        avg = round(total_gross / order_count, 2) if order_count else 0.0
+
+        tier, tier_label = _tier_for(total_net, tiers_cfg.tiers)
+
+        # Commission: normal orders earn share * tier rate (or a flat-rule
+        # channel amount, e.g. TikTok); clearance orders earn the flat amount.
+        normal_commission = 0.0
+        for c in normal:
             order = by_number.get(c.order_number)
-            if order and order.is_clearance:
-                commission_amount += tiers_cfg.clearance_flat_amount * c.share_pct
-                continue
             flat = _flat_rule_for_order(order, tiers_cfg) if order else None
             if flat is not None:
-                commission_amount += flat.amount_per_order * c.share_pct
+                normal_commission += flat.amount_per_order * c.share_pct
             else:
-                commission_amount += c.net_share * tier.rate_pct / 100.0
+                normal_commission += c.net_share * tier.rate_pct / 100.0
+        clearance_commission = round(
+            sum(tiers_cfg.clearance_flat_amount * c.share_pct for c in clearance), 2
+        )
+        clearance_net = round(sum(c.net_share for c in clearance), 2)
 
         sa_summaries.append(
             SACommission(
@@ -151,8 +151,11 @@ def compute_commissions(
                 avg_order_value=avg,
                 tier_rate_pct=tier.rate_pct,
                 tier_label=tier_label,
-                commission_amount=round(commission_amount, 2),
+                commission_amount=round(normal_commission + clearance_commission, 2),
                 contributions=sorted(sa_contribs, key=lambda c: c.order_date),
+                clearance_order_count=len(clearance),
+                clearance_net_sales=clearance_net,
+                clearance_commission=clearance_commission,
             )
         )
 

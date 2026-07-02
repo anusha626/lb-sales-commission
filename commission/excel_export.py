@@ -140,8 +140,10 @@ def _build_sa_sheet(
     row = 2
     for c in sa.contributions:
         order = orders_by_number.get(c.order_number)
+        clr = bool(order and order.is_clearance)
+        on_label = c.order_number + ("  ·CLEARANCE(flat)" if clr else "")
         if order is None or order.excluded or not order.charges:
-            ws.cell(row=row, column=1, value=c.order_number)
+            ws.cell(row=row, column=1, value=on_label)
             ws.cell(row=row, column=2, value=c.order_date.strftime("%Y-%m-%d"))
             ws.cell(row=row, column=3, value=order.channel if order else "")
             ws.cell(row=row, column=4, value=order.gross_total if order else 0).number_format = _MONEY_FMT
@@ -150,7 +152,7 @@ def _build_sa_sheet(
             row += 1
             continue
         for ch in order.charges:
-            ws.cell(row=row, column=1, value=order.order_number)
+            ws.cell(row=row, column=1, value=on_label)
             ws.cell(row=row, column=2, value=order.order_date.strftime("%Y-%m-%d"))
             ws.cell(row=row, column=3, value=order.channel)
             ws.cell(row=row, column=4, value=order.gross_total).number_format = _MONEY_FMT
@@ -166,13 +168,28 @@ def _build_sa_sheet(
                 ws.cell(row=row, column=12, value=c.net_share).number_format = _MONEY_FMT
             row += 1
 
-    # Totals
-    ws.cell(row=row, column=1, value="TOTALS").font = Font(bold=True)
+    # Totals — clearance sales are a separate flat bucket, kept OUT of the
+    # sales total (and the tier).
+    sales_label = "SALES TOTAL" + (
+        " (excl. clearance)" if sa.clearance_order_count else ""
+    )
+    ws.cell(row=row, column=1, value=sales_label).font = Font(bold=True)
     ws.cell(row=row, column=12, value=sa.total_net_sales).number_format = _MONEY_FMT
     ws.cell(row=row, column=12).font = Font(bold=True)
-    ws.cell(row=row + 1, column=11, value=f"Tier: {sa.tier_label}").font = Font(italic=True)
-    ws.cell(row=row + 1, column=12, value=sa.commission_amount).number_format = _MONEY_FMT
-    ws.cell(row=row + 1, column=12).font = Font(bold=True, color="0F766E")
+    row += 1
+    if sa.clearance_order_count:
+        ws.cell(
+            row=row, column=1,
+            value=f"Clearance (flat): {sa.clearance_order_count} order(s)",
+        ).font = Font(italic=True)
+        ws.cell(row=row, column=10, value=sa.clearance_net_sales).number_format = _MONEY_FMT
+        ws.cell(row=row, column=12, value=sa.clearance_commission).number_format = _MONEY_FMT
+        ws.cell(row=row, column=12).font = Font(italic=True)
+        row += 1
+    ws.cell(row=row, column=1, value="TOTAL COMMISSION").font = Font(bold=True, color="0F766E")
+    ws.cell(row=row, column=11, value=f"Tier: {sa.tier_label}").font = Font(italic=True)
+    ws.cell(row=row, column=12, value=sa.commission_amount).number_format = _MONEY_FMT
+    ws.cell(row=row, column=12).font = Font(bold=True, color="0F766E")
     _autosize(ws)
 
 

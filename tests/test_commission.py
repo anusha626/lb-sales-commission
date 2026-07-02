@@ -255,3 +255,25 @@ def test_clearance_tag_detection_year_optional():
     assert cfg.is_clearance_note("minkei sales  june 2026") is True   # case + spacing
     assert cfg.is_clearance_note("MINKEI\nWALK IN PJ\nCASH RM500") is False
     assert cfg.is_clearance_note("COMPANY SALES\nCASH RM500") is False
+
+
+def test_clearance_excluded_from_total_sales():
+    """Clearance orders are kept OUT of the SA's sales totals (gross, net,
+    order count) and summarised separately; commission still includes the
+    flat amount."""
+    orders = [
+        _make_order(order_number="#N1", sa_shares=[("MINKEI", 1.0)], gross=10000.0),
+        _make_order(order_number="#C1", sa_shares=[("MINKEI", 1.0)],
+                    gross=5000.0, is_clearance=True),
+    ]
+    report = compute_commissions(orders, _default_tiers())
+    m = report.sa_summaries[0]
+    assert m.total_net_sales == 10000.0          # clearance 5,000 NOT included
+    assert m.total_gross_sales == 10000.0
+    assert m.order_count == 1                     # only the normal order
+    assert m.clearance_order_count == 1
+    assert m.clearance_net_sales == 5000.0
+    assert m.clearance_commission == 10.0
+    assert m.commission_amount == round(10000 * 0.008 + 10.0, 2)
+    # Report-level totals also exclude clearance sales
+    assert report.total_sa_net == 10000.0

@@ -177,6 +177,12 @@ class SACommission(BaseModel):
     tier_label: str
     commission_amount: float
     contributions: list[SAContribution] = Field(default_factory=list)
+    # Clearance-stock orders are kept OUT of the sales totals above (gross,
+    # net, order_count, avg) and the tier; they earn a flat amount instead,
+    # summarised here. commission_amount still includes clearance_commission.
+    clearance_order_count: int = 0
+    clearance_net_sales: float = 0.0
+    clearance_commission: float = 0.0
 
 
 class HouseSalesSummary(BaseModel):

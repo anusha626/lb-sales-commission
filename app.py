@@ -792,6 +792,15 @@ def page_report() -> None:
                 c3.metric("Net", fmt_money(s.total_net_sales))
                 c4.metric("Commission", fmt_money(s.commission_amount))
 
+                if s.clearance_order_count:
+                    st.caption(
+                        f"➕ {s.clearance_order_count} clearance order(s) are "
+                        f"**excluded** from the sales figures above "
+                        f"({fmt_money(s.clearance_net_sales)} in sales) — they earn a "
+                        f"flat **{fmt_money(s.clearance_commission)}**, already included "
+                        f"in Commission. See the “Clearance (flat)” rows below."
+                    )
+
                 with st.expander("Order-by-order breakdown"):
                     rows = [
                         _contribution_row(
