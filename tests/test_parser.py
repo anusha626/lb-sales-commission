@@ -398,3 +398,21 @@ def test_fullwidth_percent_split():
         ("MINKEI", 0.7),
         ("RISKA", 0.3),
     }
+
+
+def test_amount_split_with_company_sales_remainder():
+    """Named amounts + a COMPANY SALES portion: the SA amounts divide by the
+    ORDER TOTAL and the shortfall goes to the house, not into the SAs.
+    'MINKEI RM5003 MICHELLE RM3997 COMPANY SALE - BAG SPA RM250' on RM9,250."""
+    p = parse_seller_note(
+        "MINKEI RM 5003 MICHELLE RM3997 COMPANY SALE - BAG SPA RM250 "
+        "WALK IN SS2 ONLINE TRANSFER RM9250",
+        order_total=9250.0,
+        sa_list=["MINKEI", "MICHELLE", "LILY", "CHLOE"],
+    )
+    shares = {s.name: round(s.share, 4) for s in p.sa_shares}
+    assert shares == {
+        "MINKEI": round(5003 / 9250, 4),
+        "MICHELLE": round(3997 / 9250, 4),
+        HOUSE_ACCOUNT: round(250 / 9250, 4),
+    }

@@ -209,15 +209,17 @@ def _detect_split_shares(
 
 
 def _detect_amount_shares(
-    note: str, sa_pool: list[str]
+    note: str, sa_pool: list[str], order_total: float = 0.0
 ) -> list[SAShare] | None:
     """Detect amount-based splits like 'CHLOE RM1350 MINKEI RM5050', where each
     SA is followed by their own sales amount instead of a percentage.
 
-    Each SA's share is amount / (sum of all detected SA amounts), so e.g. CHLOE
-    gets 1350/6400 and MINKEI gets 5050/6400. Returns None unless at least two
-    distinct SAs each carry an amount (a single SA is handled elsewhere as
-    100%, regardless of any amount written next to it).
+    Each SA's share is amount / (sum of amounts). If the note also names
+    COMPANY SALES and the SA amounts fall short of the order total, the
+    shortfall is attributed to the house account (e.g.
+    'MINKEI RM5003 MICHELLE RM3997 COMPANY SALE - BAG SPA RM250' on a RM9,250
+    order → MINKEI 5003, MICHELLE 3997, COMPANY SALES 250, all over 9,250).
+    Returns None unless at least two distinct SAs each carry an amount.
     """
     candidates: list[tuple[str, float, int]] = []  # (name, amount, position)
     seen: set[str] = set()
@@ -242,14 +244,28 @@ def _detect_amount_shares(
     if len(candidates) < 2:
         return None
 
-    total = sum(amt for _, amt, _ in candidates)
-    if total <= 0:
+    sa_sum = sum(amt for _, amt, _ in candidates)
+    if sa_sum <= 0:
         return None
+
+    # A leftover to the order total, when COMPANY SALES is named, is the house
+    # (non-commission) portion — so the SA amounts divide by the TOTAL, not
+    # just their own sum, and the house takes the rest.
+    house_amt = 0.0
+    if order_total:
+        remainder = round(order_total - sa_sum, 2)
+        if remainder > 0 and re.search(r"\bCOMPANY\s+SALES?\b", note):
+            house_amt = remainder
+
+    total = sa_sum + house_amt
     candidates.sort(key=lambda x: x[2])
-    return [
+    shares = [
         SAShare(name=name, share=round(amt / total, 6))
         for name, amt, _ in candidates
     ]
+    if house_amt > 0:
+        shares.append(SAShare(name=HOUSE_ACCOUNT, share=round(house_amt / total, 6)))
+    return shares
 
 
 def _detect_single_sa(note: str, sa_pool: list[str]) -> SAShare | None:
@@ -342,7 +358,7 @@ def parse_seller_note(
     # ---- SA shares --------------------------------------------------------
     sa_shares: list[SAShare] = []
     split = _detect_split_shares(upper_note, sa_pool)
-    amount_split = split or _detect_amount_shares(upper_note, sa_pool)
+    amount_split = split or _detect_amount_shares(upper_note, sa_pool, order_total)
     if amount_split:
         sa_shares = amount_split
     else:
