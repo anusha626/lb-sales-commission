@@ -9,6 +9,7 @@ Streamlit is only used for UI glue. All calculation lives in `commission/*`.
 """
 from __future__ import annotations
 
+import io
 from datetime import date, datetime, timedelta
 
 import pandas as pd
@@ -302,6 +303,7 @@ def _ensure_state() -> None:
     # order_number -> date the payment cleared, entered by hand for paid
     # orders whose export carries no transaction date.
     st.session_state.setdefault("settlement_overrides", {})
+    st.session_state.setdefault("clearance_skus", set())  # from products export
 
 
 def _reload_settings() -> None:
@@ -326,6 +328,7 @@ def _recompute_orders(
         date_from=date_from,
         date_to=date_to,
         overrides=st.session_state["overrides"],
+        clearance_skus=st.session_state.get("clearance_skus") or set(),
     )
     st.session_state["orders"] = orders
 
@@ -353,6 +356,25 @@ def page_upload() -> None:
         except Exception as e:
             st.error(f"Couldn't read CSV: {e}")
             return
+
+    # Optional clearance-products export: any order line-item whose SKU is in
+    # this list is treated as clearance (flat RM10), on top of the note tag.
+    clr_upl = st.file_uploader(
+        "Clearance products export (optional) — items sold at flat RM10",
+        type=["csv"],
+        key="clr_upl",
+    )
+    if clr_upl is not None:
+        try:
+            cdf = pd.read_csv(io.BytesIO(clr_upl.getvalue()), dtype=str).fillna("")
+            sku_col = next((c for c in cdf.columns if c.strip().lower() in ("sku", "variant sku")), None)
+            skus = {s.strip() for s in cdf[sku_col] if s.strip()} if sku_col else set()
+            st.session_state["clearance_skus"] = skus
+            st.caption(f"🏷️ {len(skus)} clearance SKU(s) loaded — matching order items earn flat RM10.")
+        except Exception as e:
+            st.warning(f"Couldn't read clearance products CSV: {e}")
+    elif st.session_state.get("clearance_skus"):
+        st.caption(f"🏷️ {len(st.session_state['clearance_skus'])} clearance SKU(s) active.")
 
     if st.session_state["df"] is None:
         st.info("Drop a CSV above to get started.")

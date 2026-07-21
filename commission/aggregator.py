@@ -75,13 +75,31 @@ def _settlement_date_for_group(group: pd.DataFrame) -> str:
     return max(dates) if dates else ""
 
 
-def _aggregate_rows(df: pd.DataFrame) -> list[dict]:
+def _clearance_sku_amount(group: pd.DataFrame, clearance_skus: set[str] | None) -> float:
+    """Sum (Item Price × Quantity) of line items whose SKU is on the clearance
+    list — the gross clearance portion of this order."""
+    if not clearance_skus or "Item SKU" not in group.columns:
+        return 0.0
+    total = 0.0
+    for _, r in group.iterrows():
+        sku = str(r.get("Item SKU", "")).strip()
+        if sku and sku in clearance_skus:
+            price = _parse_total(str(r.get("Item Price", "") or "0"))
+            qty = _parse_total(str(r.get("Quantity", "") or "1")) or 1.0
+            total += price * qty
+    return round(total, 2)
+
+
+def _aggregate_rows(
+    df: pd.DataFrame, clearance_skus: set[str] | None = None
+) -> list[dict]:
     """Collapse a multi-row order export to one record per Order Number.
 
     EasyStore writes split-payment / multi-line orders as several rows; only
     the first carries metadata (Note, Order Status, Financial Status, Total).
-    The per-transaction rows still carry the data we use to derive the
-    settlement date, so we fold that across the whole group.
+    The per-transaction/line-item rows still carry the data we use to derive
+    the settlement date and the clearance-SKU amount, so we fold those across
+    the whole group.
     """
     out: list[dict] = []
     for order_number, group in df.groupby("Order Number", sort=False):
@@ -95,6 +113,7 @@ def _aggregate_rows(df: pd.DataFrame) -> list[dict]:
         )
         rec = head.to_dict()
         rec["__settlement_date__"] = _settlement_date_for_group(group)
+        rec["__clearance_sku_amount__"] = _clearance_sku_amount(group, clearance_skus)
         out.append(rec)
     return out
 
@@ -168,6 +187,7 @@ def build_order_results(
     date_from: date | None = None,
     date_to: date | None = None,
     overrides: dict[str, ParsedNote] | None = None,
+    clearance_skus: set[str] | None = None,
 ) -> list[OrderResult]:
     """Run the full pipeline: aggregate → filter → parse → cost.
 
@@ -176,7 +196,7 @@ def build_order_results(
     parser output is replaced wholesale.
     """
     overrides = overrides or {}
-    aggregated = _aggregate_rows(df)
+    aggregated = _aggregate_rows(df, clearance_skus)
     sa_pool = settings.sa_list.active_names
 
     out: list[OrderResult] = []
@@ -204,7 +224,11 @@ def build_order_results(
             settlement_date = note_paid
 
         gross = _parse_total(row["Total Amount"])
-        clearance_amount = settings.tiers.clearance_amount_from_note(note_text, gross)
+        # Clearance = the larger of the note tag ("SALES JUNE …") and the
+        # clearance-SKU line-item total, capped at the order gross.
+        note_clr = settings.tiers.clearance_amount_from_note(note_text, gross)
+        sku_clr = float(row.get("__clearance_sku_amount__") or 0.0)
+        clearance_amount = min(max(note_clr, sku_clr), gross) if gross else max(note_clr, sku_clr)
         is_clearance = clearance_amount >= gross > 0  # fully clearance
         channel = row.get("Channel", "") or ""
         order_status = row.get("Order Status", "") or ""
