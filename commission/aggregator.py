@@ -188,6 +188,7 @@ def build_order_results(
     date_to: date | None = None,
     overrides: dict[str, ParsedNote] | None = None,
     clearance_skus: set[str] | None = None,
+    clearance_from: date | None = None,
 ) -> list[OrderResult]:
     """Run the full pipeline: aggregate → filter → parse → cost.
 
@@ -228,6 +229,11 @@ def build_order_results(
         # clearance-SKU line-item total, capped at the order gross.
         note_clr = settings.tiers.clearance_amount_from_note(note_text, gross)
         sku_clr = float(row.get("__clearance_sku_amount__") or 0.0)
+        # SKU-based clearance only applies to sales on/after the effective date
+        # (items go on clearance later; earlier sales were full price). The
+        # note tag is always honoured — the SA marked it clearance at the time.
+        if clearance_from and order_date.date() < clearance_from:
+            sku_clr = 0.0
         clearance_amount = min(max(note_clr, sku_clr), gross) if gross else max(note_clr, sku_clr)
         is_clearance = clearance_amount >= gross > 0  # fully clearance
         channel = row.get("Channel", "") or ""

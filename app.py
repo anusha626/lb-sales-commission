@@ -329,6 +329,7 @@ def _recompute_orders(
         date_to=date_to,
         overrides=st.session_state["overrides"],
         clearance_skus=st.session_state.get("clearance_skus") or set(),
+        clearance_from=st.session_state.get("clearance_from"),
     )
     st.session_state["orders"] = orders
 
@@ -373,8 +374,18 @@ def page_upload() -> None:
             st.caption(f"🏷️ {len(skus)} clearance SKU(s) loaded — matching order items earn flat RM10.")
         except Exception as e:
             st.warning(f"Couldn't read clearance products CSV: {e}")
-    elif st.session_state.get("clearance_skus"):
-        st.caption(f"🏷️ {len(st.session_state['clearance_skus'])} clearance SKU(s) active.")
+    if st.session_state.get("clearance_skus"):
+        st.session_state["clearance_from"] = st.date_input(
+            "Clearance effective from",
+            value=st.session_state.get("clearance_from") or date.today().replace(day=1),
+            help="SKU-matched items count as clearance only for orders on/after this "
+                 "date. Earlier sales (full price before the item went on clearance) "
+                 "are untouched. The 'SALES JUNE' note tag always applies regardless.",
+        )
+        st.caption(
+            f"🏷️ {len(st.session_state['clearance_skus'])} clearance SKU(s) active "
+            f"for orders on/after {st.session_state['clearance_from']}."
+        )
 
     if st.session_state["df"] is None:
         st.info("Drop a CSV above to get started.")

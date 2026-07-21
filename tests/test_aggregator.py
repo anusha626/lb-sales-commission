@@ -118,3 +118,25 @@ def test_no_paid_on_note_keeps_transaction_settlement():
     )])
     o = build_order_results(df, settings)[0]
     assert o.settlement_date.strftime("%Y-%m") == "2026-05"
+
+
+from datetime import date as _date  # noqa: E402
+
+
+def test_clearance_sku_gated_by_effective_date():
+    """A clearance-SKU item counts as clearance only for orders on/after the
+    effective date; earlier (full-price) sales are untouched."""
+    settings = load_all()
+    skus = {"CLR-SKU-1"}
+    rows = [
+        _row(**{"Order Number": "#MAY", "Date": "2026-05-10 10:00:00",
+                "Total Amount": "5000", "Note": "MINKEI\nCASH RM5000",
+                "Item SKU": "CLR-SKU-1", "Item Price": "5000", "Quantity": "1"}),
+        _row(**{"Order Number": "#JUL", "Date": "2026-07-10 10:00:00",
+                "Total Amount": "5000", "Note": "MINKEI\nCASH RM5000",
+                "Item SKU": "CLR-SKU-1", "Item Price": "5000", "Quantity": "1"}),
+    ]
+    orders = {o.order_number: o for o in build_order_results(
+        _df(rows), settings, clearance_skus=skus, clearance_from=_date(2026, 7, 1))}
+    assert orders["#MAY"].clearance_amount == 0.0      # full price, before cutoff
+    assert orders["#JUL"].clearance_amount == 5000.0   # clearance, on/after cutoff
