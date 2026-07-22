@@ -6,6 +6,7 @@ from io import StringIO
 import pandas as pd
 
 from commission.aggregator import build_order_results
+from commission.parser import HOUSE_ACCOUNT
 from commission.settings import load_all
 
 
@@ -140,3 +141,21 @@ def test_clearance_sku_gated_by_effective_date():
         _df(rows), settings, clearance_skus=skus, clearance_from=_date(2026, 7, 1))}
     assert orders["#MAY"].clearance_amount == 0.0      # full price, before cutoff
     assert orders["#JUL"].clearance_amount == 5000.0   # clearance, on/after cutoff
+
+
+def test_tiktok_channel_sale_split():
+    """tiktok-shop: the SA keeps 30% of the sale, 70% goes to COMPANY SALES;
+    no SA on the note → whole order is house."""
+    settings = load_all()
+    if settings.tiers.sale_split_for("tiktok-shop") is None:
+        import pytest
+        pytest.skip("no tiktok sale-split configured")
+    with_sa = build_order_results(_df([_row(
+        **{"Order Number": "#T1", "Channel": "tiktok-shop",
+           "Note": "MINKEI\nTIKTOK PAYMENT RM1000", "Total Amount": "1000"})]), settings)[0]
+    shares = {s.name: round(s.share, 4) for s in with_sa.parsed.sa_shares}
+    assert shares == {"MINKEI": 0.3, HOUSE_ACCOUNT: 0.7}
+    no_sa = build_order_results(_df([_row(
+        **{"Order Number": "#T2", "Channel": "tiktok-shop",
+           "Note": "COMPANY SALES\nTIKTOK PAYMENT RM1000", "Total Amount": "1000"})]), settings)[0]
+    assert [(s.name, s.share) for s in no_sa.parsed.sa_shares] == [(HOUSE_ACCOUNT, 1.0)]

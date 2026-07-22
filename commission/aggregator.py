@@ -22,8 +22,29 @@ import pandas as pd
 
 from .charges import calculate_charges
 from .models import OrderResult, ParsedNote, PaymentMethod, PaymentPortion, SAShare
-from .parser import parse_seller_note
-from .settings import AppSettings
+from .parser import HOUSE_ACCOUNT, parse_seller_note
+from .settings import AppSettings, TiersConfig
+
+
+def _apply_channel_sale_split(
+    parsed: ParsedNote, channel: str, tiers_cfg: TiersConfig
+) -> ParsedNote:
+    """For a channel with a sale-split rule (e.g. tiktok-shop, 30% SA), scale
+    the real SAs' shares to `sa_fraction` and give the rest to COMPANY SALES.
+    If no real SA is named, the whole order becomes COMPANY SALES."""
+    frac = tiers_cfg.sale_split_for(channel)
+    if frac is None:
+        return parsed
+    real = [s for s in parsed.sa_shares if s.name != HOUSE_ACCOUNT]
+    if not real:
+        new_shares = [SAShare(name=HOUSE_ACCOUNT, share=1.0)]
+    else:
+        rt = sum(s.share for s in real) or 1.0
+        new_shares = [
+            SAShare(name=s.name, share=round(s.share / rt * frac, 6)) for s in real
+        ]
+        new_shares.append(SAShare(name=HOUSE_ACCOUNT, share=round(1.0 - frac, 6)))
+    return parsed.model_copy(update={"sa_shares": new_shares})
 
 
 # Columns we actually consume — keep this list defensive.
@@ -254,6 +275,11 @@ def build_order_results(
                 sa_list=sa_pool,
                 channel=channel,
             )
+
+        # Channel sale-split (e.g. TikTok): the SA(s) keep only `sa_fraction`
+        # of the sale; the rest goes to COMPANY SALES. No SA on the note →
+        # the whole order is house.
+        parsed = _apply_channel_sale_split(parsed, channel, settings.tiers)
 
         if excluded_reason:
             out.append(

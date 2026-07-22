@@ -68,9 +68,20 @@ class ChannelFlatRule(BaseModel):
     label: str = ""
 
 
+class ChannelSaleSplit(BaseModel):
+    """For a channel (e.g. tiktok-shop), the SA(s) named on the order share
+    `sa_fraction` of the net; the rest goes to COMPANY SALES (house). If no SA
+    is named, the whole order is house."""
+
+    channel: str
+    sa_fraction: float  # 0..1 — SA portion; (1 - sa_fraction) → house
+    label: str = ""
+
+
 class TiersConfig(BaseModel):
     tiers: list[CommissionTier]
     channel_flat_commissions: list[ChannelFlatRule] = Field(default_factory=list)
+    channel_sale_splits: list[ChannelSaleSplit] = Field(default_factory=list)
     # Clearance-stock rule: any order whose seller note contains this tag earns
     # a flat commission instead of the tier %, and its net is left OUT of the
     # monthly net that picks the tier on normal sales. The tag matches with
@@ -84,6 +95,15 @@ class TiersConfig(BaseModel):
         for r in self.channel_flat_commissions:
             if r.channel.lower() == ch:
                 return r
+        return None
+
+    def sale_split_for(self, channel: str) -> float | None:
+        """SA fraction for a channel sale-split rule (e.g. tiktok-shop → 0.30),
+        or None if the channel has no split rule."""
+        ch = (channel or "").lower()
+        for r in self.channel_sale_splits:
+            if r.channel.lower() == ch:
+                return r.sa_fraction
         return None
 
     def is_clearance_note(self, note: str) -> bool:

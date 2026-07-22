@@ -35,6 +35,7 @@ from commission.parser import HOUSE_ACCOUNT, parse_seller_note
 from commission.settings import (
     AppSettings,
     ChannelFlatRule,
+    ChannelSaleSplit,
     CommissionTier,
     RATES_FILE,
     RateRow,
@@ -1144,6 +1145,29 @@ def page_settings() -> None:
             },
         )
 
+        st.subheader("Channel sale-split rules")
+        st.caption(
+            "Orders on these channels split the sale: the SA(s) named on the "
+            "order keep the SA % (and earn their tier rate on that portion); the "
+            "rest goes to COMPANY SALES (no commission). No SA on the note → the "
+            "whole order is company. E.g. tiktok-shop at 30% → SA 30%, company 70%."
+        )
+        split_df = pd.DataFrame(
+            [
+                {"Channel": r.channel, "SA %": round(r.sa_fraction * 100, 2), "Label": r.label}
+                for r in settings.tiers.channel_sale_splits
+            ]
+        )
+        split_edit = st.data_editor(
+            split_df,
+            num_rows="dynamic",
+            key="split_editor",
+            use_container_width=True,
+            column_config={
+                "SA %": st.column_config.NumberColumn(format="%.0f%%", min_value=0.0, max_value=100.0),
+            },
+        )
+
         if st.button("Save tiers + flat rules"):
             new_tiers: list[CommissionTier] = []
             for _, r in tier_edit.iterrows():
@@ -1166,8 +1190,21 @@ def page_settings() -> None:
                         label=str(r["Label"] or ""),
                     )
                 )
+            new_splits: list[ChannelSaleSplit] = []
+            for _, r in split_edit.iterrows():
+                ch = (r["Channel"] or "").strip()
+                if not ch:
+                    continue
+                new_splits.append(
+                    ChannelSaleSplit(
+                        channel=ch,
+                        sa_fraction=float(r["SA %"] or 0) / 100.0,
+                        label=str(r["Label"] or ""),
+                    )
+                )
             settings.tiers.tiers = new_tiers
             settings.tiers.channel_flat_commissions = new_flat
+            settings.tiers.channel_sale_splits = new_splits
             save_tiers(settings.tiers)
             _reload_settings()
             _save_and_sync(TIERS_FILE, "Tiers and channel flat rules")

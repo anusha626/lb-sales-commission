@@ -4,7 +4,8 @@
     {"min_net": 200000.0,   "max_net": 349999.99, "rate_pct": 1.00},
     {"min_net": 350000.0,   "max_net": null,      "rate_pct": 1.20}
   ],
-  "channel_flat_commissions": [
-    {"channel": "tiktok-shop", "amount_per_order": 10.00, "label": "TikTok flat RM10/order"}
+  "channel_flat_commissions": [],
+  "channel_sale_splits": [
+    {"channel": "tiktok-shop", "sa_fraction": 0.30, "label": "TikTok 30% SA / 70% company"}
   ]
 }
