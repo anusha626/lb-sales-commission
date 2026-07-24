@@ -416,3 +416,17 @@ def test_amount_split_with_company_sales_remainder():
         "MICHELLE": round(3997 / 9250, 4),
         HOUSE_ACCOUNT: round(250 / 9250, 4),
     }
+
+
+def test_pj_sales_outlet_tag_not_company_sales():
+    """'PJ SALES' / 'PG SALES' are outlet tags, NOT the COMPANY SALES house
+    account — the SA on line 1 must still be credited."""
+    for tag in ("PJ SALES", "PG SALES"):
+        p = parse_seller_note(
+            f"MINKEI\nCHATDADDY - WALK IN\n{tag}\nONLINE TRANSFER RM4100",
+            order_total=4100.0,
+        )
+        assert _names(p) == [("MINKEI", 1.0)], tag
+    # Real house account still detected (full + common typo)
+    assert _names(parse_seller_note("COMPANY SALES\nCASH RM100", order_total=100.0)) == [(HOUSE_ACCOUNT, 1.0)]
+    assert _names(parse_seller_note("COMPANY SALE\nCASH RM100", order_total=100.0)) == [(HOUSE_ACCOUNT, 1.0)]
