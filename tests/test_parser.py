@@ -430,3 +430,15 @@ def test_pj_sales_outlet_tag_not_company_sales():
     # Real house account still detected (full + common typo)
     assert _names(parse_seller_note("COMPANY SALES\nCASH RM100", order_total=100.0)) == [(HOUSE_ACCOUNT, 1.0)]
     assert _names(parse_seller_note("COMPANY SALE\nCASH RM100", order_total=100.0)) == [(HOUSE_ACCOUNT, 1.0)]
+
+
+def test_tiktok_paylater_recognised():
+    """'TIKTOK PAYLATER' (TikTok BNPL) is a TikTok payment — not an
+    unrecognised method that flags 'no payment detected'."""
+    p = parse_seller_note(
+        "ANNABELL\nCHATDADDY\nTIKTOK PAYLATER RM1751.2",
+        order_total=1990.0, channel="tiktok-shop",
+    )
+    assert _methods(p) == [PaymentMethod.TIKTOK]
+    assert p.payments[0].amount == 1751.2
+    assert not any("No payment method" in f for f in p.review_flags)

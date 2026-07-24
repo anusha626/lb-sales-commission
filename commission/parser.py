@@ -48,6 +48,8 @@ _KEYWORDS: tuple[_Keyword, ...] = (
     _Keyword("VISA DEBIT", PaymentMethod.VISA_DEBIT),
     _Keyword("CREDIT VISA", PaymentMethod.VISA_CREDIT),
     _Keyword("VISA CREDIT", PaymentMethod.VISA_CREDIT),
+    _Keyword("TIKTOK PAYLATER", PaymentMethod.TIKTOK),
+    _Keyword("TIKTOK PAY LATER", PaymentMethod.TIKTOK),
     _Keyword("TIKTOK PAYMENT", PaymentMethod.TIKTOK),
     _Keyword("TIKTOKPAY", PaymentMethod.TIKTOK),
     _Keyword("TIKTOK PAY", PaymentMethod.TIKTOK),
