@@ -73,6 +73,8 @@ _KEYWORDS: tuple[_Keyword, ...] = (
     _Keyword("UPI", PaymentMethod.UPI),
     _Keyword("VISA", PaymentMethod.VISA_CREDIT),
     _Keyword("TNG", PaymentMethod.TNG),
+    _Keyword("ALIPAY", PaymentMethod.ALIPAY),
+    _Keyword("ALI PAY", PaymentMethod.ALIPAY),
     _Keyword("CASH", PaymentMethod.CASH),
 )
 
@@ -103,7 +105,7 @@ _NON_SA_TOKENS = {
     "WALK", "WALKIN", "WHATSAPP", "CHATDADDY", "TIKTOK", "TIKTOKPAY",
     "ONLINE", "STORE", "CASH", "MASTER", "MASTERCARD", "VISA", "AMEX",
     "JCB", "UPI", "TNG", "MYDEBIT", "MAESTRO", "FPX", "MBB", "MAYBANK",
-    "SENANGPAY", "TRADE", "DEPOSIT", "BALANCE", "TOTAL", "PJ", "KL",
+    "SENANGPAY", "TRADE", "DEPOSIT", "BALANCE", "TOTAL", "PJ", "KL", "ALIPAY",
 }
 
 

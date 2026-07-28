@@ -467,3 +467,13 @@ def test_company_leading_token_is_house_without_sales_word():
     )
     assert _names(p) == [(HOUSE_ACCOUNT, 1.0)]
     assert _methods(p) == [PaymentMethod.VISA_CREDIT]
+
+
+def test_alipay_recognised_zero_charge_wallet():
+    """ALIPAY is a recognised (zero-charge) e-wallet method, and 'ALIPAY' is
+    never mistaken for an SA name."""
+    p = parse_seller_note("LILY DEAL IN CHATDADDY\nALIPAY", order_total=2500.0)
+    assert _names(p) == [("LILY", 1.0)]
+    assert _methods(p) == [PaymentMethod.ALIPAY]
+    assert p.payments[0].amount == 2500.0
+    assert not p.review_flags
