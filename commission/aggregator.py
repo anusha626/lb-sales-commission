@@ -111,6 +111,17 @@ def _clearance_sku_amount(group: pd.DataFrame, clearance_skus: set[str] | None) 
     return round(total, 2)
 
 
+def _discount_amount(group: pd.DataFrame, head: pd.Series) -> float:
+    """Total discount given on an order: the order-level discount (header row)
+    plus the sum of per-line-item discounts. EasyStore stores these as negative
+    numbers; return a positive magnitude."""
+    total = abs(_parse_total(str(head.get("Order Discount", "") or "0")))
+    if "Item Discount" in group.columns:
+        for _, r in group.iterrows():
+            total += abs(_parse_total(str(r.get("Item Discount", "") or "0")))
+    return round(total, 2)
+
+
 def _aggregate_rows(
     df: pd.DataFrame, clearance_skus: set[str] | None = None
 ) -> list[dict]:
@@ -135,6 +146,7 @@ def _aggregate_rows(
         rec = head.to_dict()
         rec["__settlement_date__"] = _settlement_date_for_group(group)
         rec["__clearance_sku_amount__"] = _clearance_sku_amount(group, clearance_skus)
+        rec["__discount_amount__"] = _discount_amount(group, head)
         out.append(rec)
     return out
 
@@ -257,6 +269,7 @@ def build_order_results(
             sku_clr = 0.0
         clearance_amount = min(max(note_clr, sku_clr), gross) if gross else max(note_clr, sku_clr)
         is_clearance = clearance_amount >= gross > 0  # fully clearance
+        discount_total = float(row.get("__discount_amount__") or 0.0)
         channel = row.get("Channel", "") or ""
         order_status = row.get("Order Status", "") or ""
         financial_status = row.get("Financial Status", "") or ""
@@ -293,6 +306,7 @@ def build_order_results(
                     financial_status=financial_status,
                     order_status=order_status,
                     gross_total=gross,
+                    discount_total=discount_total,
                     parsed=parsed,
                     tags=tags,
                     charges=[],
@@ -325,6 +339,7 @@ def build_order_results(
                 financial_status=financial_status,
                 order_status=order_status,
                 gross_total=gross,
+                discount_total=discount_total,
                 parsed=parsed,
                 tags=tags,
                 charges=charge_lines,

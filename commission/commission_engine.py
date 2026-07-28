@@ -121,6 +121,7 @@ def build_contributions(orders: list[OrderResult]) -> list[SAContribution]:
             parts = [(1.0, True)]            # all clearance
         else:
             parts = [(1.0 - cf, False), (cf, True)]  # split
+        dt = getattr(o, "discount_total", 0.0) or 0.0
         for share in o.parsed.sa_shares:
             for frac, is_clr in parts:
                 out.append(
@@ -132,6 +133,7 @@ def build_contributions(orders: list[OrderResult]) -> list[SAContribution]:
                         net_share=round(o.net_total * frac * share.share, 2),
                         share_pct=share.share,
                         is_clearance=is_clr,
+                        discount_share=round(dt * frac * share.share, 2),
                     )
                 )
     return out

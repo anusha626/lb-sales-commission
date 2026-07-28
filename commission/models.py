@@ -122,6 +122,10 @@ class OrderResult(BaseModel):
     financial_status: str
     order_status: str
     gross_total: float
+    # Total discount given on the order (Order Discount + Item Discount from the
+    # export), as a positive magnitude. Informational only — does not affect
+    # gross/net/commission.
+    discount_total: float = 0.0
     parsed: ParsedNote
     tags: list[str] = Field(default_factory=list)
     charges: list[ChargeLine] = Field(default_factory=list)
@@ -163,6 +167,7 @@ class SAContribution(BaseModel):
     net_share: float
     share_pct: float  # 0..1
     is_clearance: bool = False
+    discount_share: float = 0.0  # this SA's portion of the order discount
 
 
 class CommissionTier(BaseModel):

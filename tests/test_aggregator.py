@@ -159,3 +159,29 @@ def test_tiktok_channel_sale_split():
         **{"Order Number": "#T2", "Channel": "tiktok-shop",
            "Note": "COMPANY SALES\nTIKTOK PAYMENT RM1000", "Total Amount": "1000"})]), settings)[0]
     assert [(s.name, s.share) for s in no_sa.parsed.sa_shares] == [(HOUSE_ACCOUNT, 1.0)]
+
+
+def test_discount_captured_and_split_across_sas():
+    """'Order Discount' + 'Item Discount' are captured as a positive
+    discount_total on the order and split per-SA into discount_share."""
+    from commission.commission_engine import build_contributions
+
+    settings = load_all()
+    df = _df(
+        [
+            _row(**{
+                "Order Number": "#D1",
+                "Total Amount": "250.00",
+                "Note": "MINKEI 60% LILY 40%\nCASH RM250",
+                "Order Discount": "-240.00",
+                "Item Discount": "-10.00",
+            }),
+        ]
+    )
+    orders = build_order_results(df, settings, include_unpaid=False)
+    o = next(o for o in orders if o.order_number == "#D1")
+    assert o.discount_total == 250.0  # 240 order + 10 item, as a magnitude
+
+    contribs = {c.sa_name: c for c in build_contributions(orders)}
+    assert contribs["MINKEI"].discount_share == 150.0  # 250 * 0.6
+    assert contribs["LILY"].discount_share == 100.0    # 250 * 0.4
