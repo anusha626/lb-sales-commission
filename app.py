@@ -263,6 +263,7 @@ def _contribution_row(contribution, order, *, tier_rate_pct=None, tiers_cfg=None
         "Date": contribution.order_date.strftime("%Y-%m-%d"),
         "Share %": f"{contribution.share_pct * 100:.0f}%",
         "Gross share": contribution.gross_share,
+        "Discount": getattr(contribution, "discount_share", 0.0),
         "Charges": charges_share,
         "Net share": contribution.net_share,
         "Payment method": _format_payment_summary(order),
@@ -878,6 +879,7 @@ def page_report() -> None:
                             use_container_width=True,
                             column_config={
                                 "Gross share": st.column_config.NumberColumn(format="RM %.2f"),
+                                "Discount": st.column_config.NumberColumn(format="RM %.2f"),
                                 "Charges": st.column_config.NumberColumn(format="RM %.2f"),
                                 "Net share": st.column_config.NumberColumn(format="RM %.2f"),
                                 "Commission": st.column_config.NumberColumn(format="RM %.2f"),
@@ -907,6 +909,7 @@ def page_report() -> None:
                     use_container_width=True,
                     column_config={
                         "Gross share": st.column_config.NumberColumn(format="RM %.2f"),
+                        "Discount": st.column_config.NumberColumn(format="RM %.2f"),
                         "Charges": st.column_config.NumberColumn(format="RM %.2f"),
                         "Net share": st.column_config.NumberColumn(format="RM %.2f"),
                     },
