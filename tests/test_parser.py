@@ -442,3 +442,28 @@ def test_tiktok_paylater_recognised():
     assert _methods(p) == [PaymentMethod.TIKTOK]
     assert p.payments[0].amount == 1751.2
     assert not any("No payment method" in f for f in p.review_flags)
+
+
+def test_misspelled_online_transfer_recognised():
+    """'ONLINE TRASNFER' (TRANSFER misspelled) is still a bank transfer, not an
+    unrecognised method — online transfer == bank transfer."""
+    p = parse_seller_note(
+        "ANNABELL\nCHATDADDY\nONLINE TRASNFER RM1990", order_total=1990.0
+    )
+    assert _methods(p) == [PaymentMethod.BANK_TRANSFER]
+    assert p.payments[0].amount == 1990.0
+
+
+def test_bank_transfer_typo_recognised():
+    p = parse_seller_note("LILY\nBANK TRANFER RM800", order_total=800.0)
+    assert _methods(p) == [PaymentMethod.BANK_TRANSFER]
+
+
+def test_company_leading_token_is_house_without_sales_word():
+    """'COMPANY' leading the note means company sales even without a following
+    'SALES' word ('COMPANY WALK IN ...')."""
+    p = parse_seller_note(
+        "COMPANY WALK IN VISA CREDIT 7490 RM400", order_total=400.0
+    )
+    assert _names(p) == [(HOUSE_ACCOUNT, 1.0)]
+    assert _methods(p) == [PaymentMethod.VISA_CREDIT]

@@ -76,6 +76,9 @@ _KEYWORDS: tuple[_Keyword, ...] = (
     _Keyword("CASH", PaymentMethod.CASH),
 )
 
+# Synthetic keyword returned by the fuzzy "TRANSFER" fallback in _find_keyword.
+_TRANSFER_KW = _Keyword("TRANSFER", PaymentMethod.BANK_TRANSFER)
+
 
 _AMOUNT_RE = re.compile(r"RM\s?([\d,]+(?:\.\d+)?)", re.IGNORECASE)
 _FOUR_DIGIT_RE = re.compile(r"\b(\d{4})\b")
@@ -122,6 +125,16 @@ def _find_keyword(line: str) -> tuple[_Keyword, int, int] | None:
             continue
         if best is None or (end - idx) > (best[2] - best[1]):
             best = (kw, idx, end)
+    if best is None and ("ONLINE" in upper or "BANK" in upper):
+        # Fuzzy fallback for a misspelled "TRANSFER" (e.g. "ONLINE TRASNFER",
+        # "BANK TRANFER"). Only runs when no exact keyword matched AND the line
+        # carries an ONLINE/BANK qualifier, so a bare "DEPOSIT TRANSFER" still
+        # flags for Review and no card/e-wallet method gets overridden.
+        # Online transfer == bank transfer.
+        for m in re.finditer(r"[A-Z]{6,}", upper):
+            if fuzz.ratio(m.group(0), "TRANSFER") >= 85:
+                best = (_TRANSFER_KW, m.start(), m.end())
+                break
     return best
 
 
@@ -278,14 +291,20 @@ def _detect_single_sa(note: str, sa_pool: list[str]) -> SAShare | None:
 
     lines = [ln.strip() for ln in upper.split("\n") if ln.strip()]
 
-    # Fuzzy match for the house account — catches typos like "COMPANY SALE"
-    # (missing S) or "COMPNAY SALES" (transposition). Requires a COMPANY-like
-    # word so an outlet tag such as "PJ SALES" / "PG SALES" is NOT mistaken for
-    # the house account (partial_ratio alone matches those on "SALES").
+    # House account — "COMPANY" leading the note is the seller identity and
+    # means company sales, with or without a following "SALES" ("COMPANY WALK
+    # IN ..." counts). Anchoring on the FIRST token (fuzzy, catches typos like
+    # "COMPNAY") keeps a mid-note phrase such as "COMPANY POLICY DISCOUNT" — or
+    # an outlet tag "PJ SALES" / "PG SALES" — from being mistaken for the house
+    # account.
+    first_words = re.split(r"[\s,/&\-]+", lines[0]) if lines else []
+    if first_words and fuzz.ratio("COMPANY", first_words[0]) >= 82:
+        return SAShare(name=HOUSE_ACCOUNT, share=1.0)
+    # Also honour a "COMPANY SALES" tag that appears mid-note (fuzzy on both the
+    # COMPANY-like word and a nearby SALE), e.g. a trailing "... COMPANY SALES".
     for line in lines[:3]:
-        words = line.split()
-        has_company = any(fuzz.ratio("COMPANY", w) >= 80 for w in words)
-        if has_company and "SALE" in line:
+        words = re.split(r"[\s,/&\-]+", line)
+        if any(fuzz.ratio("COMPANY", w) >= 82 for w in words) and "SALE" in line:
             return SAShare(name=HOUSE_ACCOUNT, share=1.0)
 
     # Check the first 3 lines for an SA token (SA name is conventionally first)
