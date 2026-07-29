@@ -245,7 +245,10 @@ def _sa_order_row(
     if blank_commission:
         ws.cell(row=row, column=11, value=None)                   # reference row
     elif d["is_clr"]:
-        ws.cell(row=row, column=11, value=f"={flat}")             # K: flat amount
+        # K: flat RM per ORDER, split by this SA's share (J). A 30% share on a
+        # clearance order earns 30% × RM10 = RM3 — matching the engine and the
+        # on-screen breakdown, not the full flat.
+        ws.cell(row=row, column=11, value=f"=J{row}*{flat}")
     else:
         # K: net × the LIVE tier rate cell, so deleting/adding rows re-picks
         # the bracket and the whole sheet still ties.

@@ -324,3 +324,39 @@ def test_partial_clearance_order_split():
     assert m.clearance_order_count == 1
     # Commission = 490 × 0.8% (tier) + RM10 flat clearance
     assert m.commission_amount == round(490 * 0.008 + 10.0, 2)
+
+
+def test_excel_clearance_row_scales_commission_by_share():
+    """Regression: the Excel per-SA clearance row must credit RM10 × share,
+    not the full flat. A 30% share on a clearance order = RM3, matching the
+    engine — the sheet previously hardcoded the full RM10."""
+    import io
+    from openpyxl import load_workbook
+    from commission.excel_export import build_workbook
+    from commission.settings import load_all
+
+    orders = [
+        _make_order(
+            order_number="#C9",
+            sa_shares=[("MICHELLE", 0.7), ("MINKEI", 0.3)],
+            gross=1000.0,
+            is_clearance=True,
+        )
+    ]
+    settings = load_all()
+    report = compute_commissions(orders, settings.tiers)
+    wb = load_workbook(
+        io.BytesIO(build_workbook(orders, report, settings, all_orders=orders))
+    )
+    ws = wb["SA - MINKEI"]
+    for r in range(1, ws.max_row + 1):
+        label = str(ws.cell(row=r, column=1).value or "")
+        if "·clearance" in label:
+            share = ws.cell(row=r, column=10).value      # J: 0.3
+            comm = str(ws.cell(row=r, column=11).value)  # K: formula
+            assert share == 0.3
+            # commission must reference the share cell (× flat), not be a bare 10
+            assert comm.startswith("=J") and "10" in comm
+            break
+    else:
+        raise AssertionError("no clearance row found on MINKEI sheet")
