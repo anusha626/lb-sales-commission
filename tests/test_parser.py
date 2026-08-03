@@ -500,3 +500,30 @@ def test_multiple_methods_on_one_line_split_into_portions():
     # The card portion keeps its last4 so it can be charged the card rate.
     assert p.payments[0].last4 == "6228"
     assert not p.review_flags
+
+
+def test_split_without_percent_sign():
+    """A split written without '%' signs still splits — LILY's #10125
+    'LILY 50 / COMPANY SALES 50' is LILY 50% + house 50%, not 100% house."""
+    p = parse_seller_note(
+        "LILY 50 \nCOMPANY SALES 50\nCHATDADDY\nDEPOSIT ONLINE TRANSFER RM4700\n"
+        "BALANCE CASH RM6500\nBALANCE ONLINE TRANSFER RM1300",
+        order_total=12500.0,
+    )
+    assert {(s.name, round(s.share, 2)) for s in p.sa_shares} == {
+        ("LILY", 0.5),
+        (HOUSE_ACCOUNT, 0.5),
+    }
+
+
+def test_bare_number_split_three_way():
+    p = parse_seller_note("MINKEI 50 MICHELLE 30 LILY 20\nCASH RM1000", order_total=1000.0)
+    assert {(s.name, round(s.share, 2)) for s in p.sa_shares} == {
+        ("MINKEI", 0.5), ("MICHELLE", 0.3), ("LILY", 0.2),
+    }
+
+
+def test_rm_amount_not_read_as_percent_split():
+    """Guard: 'CASH RM50' must not be read as a 50% share for a lone SA."""
+    p = parse_seller_note("MINKEI\nWALK IN\nCASH RM50", order_total=50.0)
+    assert _names(p) == [("MINKEI", 1.0)]

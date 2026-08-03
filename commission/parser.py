@@ -84,11 +84,14 @@ _TRANSFER_KW = _Keyword("TRANSFER", PaymentMethod.BANK_TRANSFER)
 
 _AMOUNT_RE = re.compile(r"RM\s?([\d,]+(?:\.\d+)?)", re.IGNORECASE)
 _FOUR_DIGIT_RE = re.compile(r"\b(\d{4})\b")
-# Split notation: "MINKEI 70% LILY 30%", "MINKEI 60% / LILY 40%", "MINKEI 60%/LILY 40%".
+# Split notation: "MINKEI 70% LILY 30%", "MINKEI 60% / LILY 40%", and the same
+# WITHOUT the percent sign — "LILY 50 COMPANY SALES 50". The % is optional; a bare
+# number is only read as a share when it is 1-100, is not an RM payment amount,
+# and the parties' shares total ~100% (all guarded in _detect_split_shares).
 # The name is captured as up to TWO words so an SA name typed with a stray space
-# ("MIN KEI 40%") is matched as a whole, not truncated to its last word ("KEI").
+# ("MIN KEI 40%") or the house account ("COMPANY SALES 50") is matched as a whole.
 _SPLIT_RE = re.compile(
-    r"([A-Z]+(?:\s+[A-Z]+)?)\s*(\d{1,3})\s*%",
+    r"([A-Z]+(?:\s+[A-Z]+)?)\s*(\d{1,3})\s*%?",
     re.IGNORECASE,
 )
 # Amount-split notation: each SA followed by their sales amount in RM, e.g.
@@ -240,6 +243,13 @@ def _detect_split_shares(
         try:
             pct = float(m.group(2)) / 100.0
         except ValueError:
+            continue
+        # A share is a percentage (1-100). Anything larger is not a split value.
+        if not 0.0 < pct <= 1.0:
+            continue
+        # Skip RM payment amounts written without a '%' — "... CASH RM50" must
+        # not be read as a 50% share. (The '%' is optional, so guard by text.)
+        if note[: m.start(2)].rstrip().upper().endswith("RM"):
             continue
         # Reject tokens that look like generic words (channel keywords etc.)
         if token in {"WALK", "WALKIN", "WHATSAPP", "CHATDADDY", "TIKTOK", "ONLINE", "STORE"}:
