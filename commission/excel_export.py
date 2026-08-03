@@ -374,6 +374,49 @@ def _sa_order_table(
     return row + 2, row
 
 
+def _sa_manual_prev_table(
+    ws: Worksheet, row: int, n_rows: int = 6,
+) -> tuple[int, str, str]:
+    """Blank, manually-filled table for previous-month sales the system did not
+    auto-capture, so they are never missed. The user types Order #, Date,
+    Channel, Payment, Gross, Charge % and Share %; Charges, Net and Commission
+    calculate live (using the same tier rate) and the subtotal rolls into the
+    totals. Returns (next_row, commission_subtotal_cell, net_subtotal_cell)."""
+    _sa_section(
+        ws, row,
+        "PREVIOUS-MONTH SALES MISSED  ·  enter manually — Charges, Net & "
+        "Commission fill in automatically",
+        _MUTED,
+    )
+    row += 1
+    _sa_theader(ws, row)
+    row += 1
+    start = row
+    for i in range(n_rows):
+        zebra = _ZEBRA if i % 2 else None
+        for col in range(1, _SA_NC + 1):
+            c = ws.cell(row=row, column=col)
+            c.border = _BORDER
+            if zebra:
+                c.fill = PatternFill("solid", fgColor=zebra)
+            if col in _SA_RIGHT_COLS:
+                c.alignment = Alignment(horizontal="right")
+        # Live formulas — blank until the row's Gross is filled in.
+        ws.cell(row=row, column=8, value=f'=IF(E{row}="","",E{row}*G{row})')
+        ws.cell(row=row, column=9, value=f'=IF(E{row}="","",E{row}-H{row})')
+        ws.cell(
+            row=row, column=11,
+            value=f'=IF(E{row}="","",I{row}*{_TIER_RATE_REF}/100)',
+        )
+        for col in (5, 6, 8, 9, 11):
+            ws.cell(row=row, column=col).number_format = _MONEY_FMT
+        ws.cell(row=row, column=7).number_format = "0.00%"
+        ws.cell(row=row, column=10).number_format = "0%"
+        row += 1
+    _sa_subtotal(ws, row, "PREVIOUS-MONTH MISSED TOTAL", start, row - 1)
+    return row + 2, f"K{row}", f"I{row}"
+
+
 def _sa_bonus_table(ws: Worksheet, row: int, sa: SACommission, achieved_formula: str) -> tuple[int, str]:
     """Overachievement-bonus summary with live formulas. Returns
     (next_row, cash_incentive_cell)."""
@@ -503,6 +546,10 @@ def _build_sa_sheet(
     else:
         t1_net_cell = None
 
+    # ---- Table 1b: manual catch-up for missed previous-month sales ---------
+    row, missed_comm_cell, missed_net_cell = _sa_manual_prev_table(ws, row)
+    subtotal_cells.append(missed_comm_cell)
+
     # ---- Table 2: current-month sales completed ----------------------------
     row, sub_r = _sa_order_table(
         ws, row, f"{plabel.upper()} SALES COMPLETED", _NAVY, _ZEBRA,
@@ -594,7 +641,7 @@ def _build_sa_sheet(
     kh.font = Font(bold=True, size=10, color="1F4E79")
     ws.cell(row=2, column=12, value="Net (excl. clearance)").font = Font(size=9, color=_MUTED)
     ws.cell(row=3, column=12, value="Tier rate applied").font = Font(size=9, color=_MUTED)
-    net_refs = [c for c in [t1_net_cell, t2_net_cell] if c]
+    net_refs = [c for c in [t1_net_cell, t2_net_cell, missed_net_cell] if c]
     nc = ws.cell(row=2, column=13, value=("=" + "+".join(net_refs)) if net_refs else 0)
     nc.number_format = _MONEY_FMT
     nc.font = Font(bold=True)

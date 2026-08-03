@@ -385,3 +385,32 @@ def test_sa_sheet_has_payout_signoff_block():
     assert "PAYOUT SIGN-OFF" in text
     assert "Prepared by" in text and "Verified by" in text and "Approved by" in text
     assert "Total Google reviews collected this month:" in text
+
+
+def test_sa_sheet_has_manual_missed_previous_month_table():
+    """Each SA sheet has a blank, manually-filled 'previous-month sales missed'
+    table with live Charges/Net/Commission formulas that roll into the total."""
+    import io
+    from openpyxl import load_workbook
+    from commission.excel_export import build_workbook
+    from commission.settings import load_all
+
+    orders = [_make_order(order_number="#M1", sa_shares=[("MINKEI", 1.0)], gross=5000.0)]
+    settings = load_all()
+    report = compute_commissions(orders, settings.tiers)
+    wb = load_workbook(
+        io.BytesIO(build_workbook(orders, report, settings, all_orders=orders))
+    )
+    ws = wb["SA - MINKEI"]
+    labels = [str(ws.cell(row=r, column=1).value or "") for r in range(1, ws.max_row + 1)]
+    assert any("PREVIOUS-MONTH SALES MISSED" in x for x in labels)
+    missed_total_row = next(
+        r for r, x in enumerate(labels, start=1) if "PREVIOUS-MONTH MISSED TOTAL" in x
+    )
+    # Its commission subtotal must feed the before-bonus / grand total.
+    before_or_grand = [
+        str(ws.cell(row=r, column=11).value or "")
+        for r, x in enumerate(labels, start=1)
+        if "TOTAL COMMISSION" in x or "before" in x.lower()
+    ]
+    assert any(f"K{missed_total_row}" in f for f in before_or_grand)
