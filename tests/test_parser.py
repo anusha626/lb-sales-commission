@@ -517,7 +517,11 @@ def test_split_without_percent_sign():
 
 
 def test_bare_number_split_three_way():
-    p = parse_seller_note("MINKEI 50 MICHELLE 30 LILY 20\nCASH RM1000", order_total=1000.0)
+    p = parse_seller_note(
+        "MINKEI 50 MICHELLE 30 LILY 20\nCASH RM1000",
+        order_total=1000.0,
+        sa_list=["MINKEI", "MICHELLE", "LILY", "CHLOE"],
+    )
     assert {(s.name, round(s.share, 2)) for s in p.sa_shares} == {
         ("MINKEI", 0.5), ("MICHELLE", 0.3), ("LILY", 0.2),
     }
