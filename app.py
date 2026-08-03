@@ -315,6 +315,7 @@ def _reload_settings() -> None:
 def _recompute_orders(
     *,
     include_unpaid: bool,
+    include_unfulfilled: bool = False,
     date_from: date | None,
     date_to: date | None,
 ) -> None:
@@ -327,6 +328,7 @@ def _recompute_orders(
         df,
         settings,
         include_unpaid=include_unpaid,
+        include_unfulfilled=include_unfulfilled,
         date_from=date_from,
         date_to=date_to,
         overrides=st.session_state["overrides"],
@@ -397,16 +399,27 @@ def page_upload() -> None:
 
     today = date.today()
     default_from, default_to = previous_month_range(today)
-    col1, col2, col3 = st.columns([1.2, 1.2, 1])
+    col1, col2, col3, col4 = st.columns([1.2, 1.2, 1, 1])
     with col1:
         date_from = st.date_input("From", value=default_from)
     with col2:
         date_to = st.date_input("To", value=default_to)
     with col3:
         include_unpaid = st.checkbox("Include unpaid (forecast)", value=False)
+    with col4:
+        include_unfulfilled = st.checkbox(
+            "Include unfulfilled",
+            value=False,
+            help="By default a sale counts only when it is both Paid AND "
+                 "Fulfilled. Tick to also include unfulfilled / partially "
+                 "fulfilled / restocked orders.",
+        )
 
     _recompute_orders(
-        include_unpaid=include_unpaid, date_from=date_from, date_to=date_to
+        include_unpaid=include_unpaid,
+        include_unfulfilled=include_unfulfilled,
+        date_from=date_from,
+        date_to=date_to,
     )
     orders = st.session_state["orders"] or []
 

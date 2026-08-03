@@ -202,13 +202,23 @@ def _paid_month_from_note(note: str, order_date: datetime) -> datetime | None:
 
 
 def _excluded_reason(
-    order_status: str, financial_status: str, include_unpaid: bool
+    order_status: str,
+    financial_status: str,
+    fulfillment_status: str,
+    include_unpaid: bool,
+    include_unfulfilled: bool,
 ) -> str | None:
     if order_status.lower() == "cancelled":
         return "Order cancelled"
     fin = financial_status.lower()
     if not include_unpaid and fin and fin != "paid":
         return f"Financial status: {financial_status}"
+    # A sale counts only when it is both Paid AND Fulfilled. Anything other than
+    # "Fulfilled" (Unfulfilled, Partially Fulfilled, Restocked) is held out. A
+    # blank status (or a CSV without the column) is left in for compatibility.
+    ful = fulfillment_status.lower()
+    if not include_unfulfilled and ful and ful != "fulfilled":
+        return f"Fulfillment status: {fulfillment_status}"
     return None
 
 
@@ -217,6 +227,7 @@ def build_order_results(
     settings: AppSettings,
     *,
     include_unpaid: bool = False,
+    include_unfulfilled: bool = False,
     date_from: date | None = None,
     date_to: date | None = None,
     overrides: dict[str, ParsedNote] | None = None,
@@ -273,10 +284,12 @@ def build_order_results(
         channel = row.get("Channel", "") or ""
         order_status = row.get("Order Status", "") or ""
         financial_status = row.get("Financial Status", "") or ""
+        fulfillment_status = row.get("Fulfillment Status", "") or ""
         tags = _parse_tags(row.get(TAG_COL, "") or "")
 
         excluded_reason = _excluded_reason(
-            order_status, financial_status, include_unpaid
+            order_status, financial_status, fulfillment_status,
+            include_unpaid, include_unfulfilled
         )
 
         if order_number in overrides:

@@ -185,3 +185,38 @@ def test_discount_captured_and_split_across_sas():
     contribs = {c.sa_name: c for c in build_contributions(orders)}
     assert contribs["MINKEI"].discount_share == 150.0  # 250 * 0.6
     assert contribs["LILY"].discount_share == 100.0    # 250 * 0.4
+
+
+def test_sale_counts_only_when_paid_and_fulfilled():
+    """A sale counts only when it is BOTH Paid and Fulfilled. A Paid but
+    Unfulfilled / Partially Fulfilled / Restocked order is excluded by default,
+    and comes back when include_unfulfilled=True."""
+    settings = load_all()
+    df = _df(
+        [
+            _row(**{"Order Number": "#PF", "Financial Status": "Paid",
+                    "Fulfillment Status": "Fulfilled"}),
+            _row(**{"Order Number": "#PU", "Financial Status": "Paid",
+                    "Fulfillment Status": "Unfulfilled"}),
+            _row(**{"Order Number": "#PP", "Financial Status": "Paid",
+                    "Fulfillment Status": "Partially Fulfilled"}),
+        ]
+    )
+    by = {o.order_number: o for o in build_order_results(df, settings)}
+    assert not by["#PF"].excluded
+    assert by["#PU"].excluded and "Fulfillment status" in by["#PU"].excluded_reason
+    assert by["#PP"].excluded
+
+    # Opt back in
+    by2 = {o.order_number: o
+           for o in build_order_results(df, settings, include_unfulfilled=True)}
+    assert not by2["#PU"].excluded and not by2["#PP"].excluded
+
+
+def test_blank_fulfillment_status_is_not_excluded():
+    """A CSV without a Fulfillment Status value must not silently drop every
+    order (backward compatibility)."""
+    settings = load_all()
+    df = _df([_row(**{"Order Number": "#NB", "Financial Status": "Paid"})])
+    o = build_order_results(df, settings)[0]
+    assert not o.excluded
