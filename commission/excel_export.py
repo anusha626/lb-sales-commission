@@ -411,6 +411,38 @@ def _sa_bonus_table(ws: Worksheet, row: int, sa: SACommission, achieved_formula:
     return row + 1, f"K{tgt_row + 4}"
 
 
+def _sa_signoff(ws: Worksheet, row: int) -> int:
+    """Payout sign-off block: a verification statement plus Prepared / Verified /
+    Approved signature lines with name and date. Signing it marks the commission
+    on this sheet as checked and cleared for payout. Returns the next row."""
+    _sa_section(ws, row, "PAYOUT SIGN-OFF", _INK)
+    row += 1
+    stmt = ws.cell(
+        row=row, column=1,
+        value="I confirm the TOTAL COMMISSION above has been reviewed, verified "
+              "correct, and is approved for payout.",
+    )
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=_SA_NC)
+    stmt.font = Font(italic=True, color=_INK)
+    stmt.alignment = Alignment(horizontal="left", indent=1, vertical="center")
+    ws.row_dimensions[row].height = 18
+    row += 2  # a spacer row above the signature lines
+
+    line_border = Border(bottom=Side(style="thin", color=_INK))
+    blocks = [(1, 3, "Prepared by"), (5, 7, "Verified by"), (9, 11, "Approved by")]
+    sign_row, role_row, name_row, date_row = row, row + 1, row + 2, row + 3
+    ws.row_dimensions[sign_row].height = 34  # room for a physical signature
+    for c1, c2, label in blocks:
+        for c in range(c1, c2 + 1):
+            ws.cell(row=sign_row, column=c).border = line_border
+        ws.merge_cells(start_row=sign_row, start_column=c1, end_row=sign_row, end_column=c2)
+        rl = ws.cell(row=role_row, column=c1, value=label)
+        rl.font = Font(bold=True, color=_INK)
+        ws.cell(row=name_row, column=c1, value="Name:").font = Font(size=9, color=_MUTED)
+        ws.cell(row=date_row, column=c1, value="Date:").font = Font(size=9, color=_MUTED)
+    return date_row + 1
+
+
 def _build_sa_sheet(
     ws: Worksheet,
     sa: SACommission,
@@ -534,6 +566,10 @@ def _build_sa_sheet(
     gc.font = Font(bold=True, size=12, color="FFFFFF")
     gc.alignment = Alignment(horizontal="right")
     ws.row_dimensions[row].height = 22
+    row += 1
+
+    # ---- Payout sign-off ---------------------------------------------------
+    _sa_signoff(ws, row + 1)
 
     # ---- Live tier helper (top-right: M2 = sales net, M3 = tier rate) -------
     kh = ws.cell(row=1, column=12, value="LIVE TIER")

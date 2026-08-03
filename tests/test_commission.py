@@ -360,3 +360,27 @@ def test_excel_clearance_row_scales_commission_by_share():
             break
     else:
         raise AssertionError("no clearance row found on MINKEI sheet")
+
+
+def test_sa_sheet_has_payout_signoff_block():
+    """Each SA sheet ends with a sign-off block (statement + Prepared/Verified/
+    Approved signature lines) so the commission can be verified and finalized."""
+    import io
+    from openpyxl import load_workbook
+    from commission.excel_export import build_workbook
+    from commission.settings import load_all
+
+    orders = [_make_order(order_number="#S1", sa_shares=[("MINKEI", 1.0)], gross=5000.0)]
+    settings = load_all()
+    report = compute_commissions(orders, settings.tiers)
+    wb = load_workbook(
+        io.BytesIO(build_workbook(orders, report, settings, all_orders=orders))
+    )
+    ws = wb["SA - MINKEI"]
+    text = {
+        str(ws.cell(row=r, column=c).value)
+        for r in range(1, ws.max_row + 1)
+        for c in range(1, 12)
+    }
+    assert "PAYOUT SIGN-OFF" in text
+    assert "Prepared by" in text and "Verified by" in text and "Approved by" in text
