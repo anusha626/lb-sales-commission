@@ -566,10 +566,28 @@ def _build_sa_sheet(
     gc.font = Font(bold=True, size=12, color="FFFFFF")
     gc.alignment = Alignment(horizontal="right")
     ws.row_dimensions[row].height = 22
-    row += 1
+
+    # ---- Monthly Google reviews (manual entry) -----------------------------
+    gr_row = row + 2
+    lbl = ws.cell(
+        row=gr_row, column=1,
+        value="Total Google reviews collected this month:",
+    )
+    ws.merge_cells(start_row=gr_row, start_column=1, end_row=gr_row, end_column=7)
+    lbl.font = Font(bold=True, color=_INK)
+    lbl.alignment = Alignment(horizontal="right", indent=1, vertical="center")
+    ws.merge_cells(start_row=gr_row, start_column=8, end_row=gr_row, end_column=11)
+    for c in range(8, _SA_NC + 1):
+        cell = ws.cell(row=gr_row, column=c)
+        cell.border = _BORDER
+        cell.fill = PatternFill("solid", fgColor="FFF7E6")  # fill-in box
+    ws.cell(row=gr_row, column=8).alignment = Alignment(
+        horizontal="center", vertical="center"
+    )
+    ws.row_dimensions[gr_row].height = 20
 
     # ---- Payout sign-off ---------------------------------------------------
-    _sa_signoff(ws, row + 1)
+    _sa_signoff(ws, gr_row + 2)
 
     # ---- Live tier helper (top-right: M2 = sales net, M3 = tier rate) -------
     kh = ws.cell(row=1, column=12, value="LIVE TIER")

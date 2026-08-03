@@ -384,3 +384,4 @@ def test_sa_sheet_has_payout_signoff_block():
     }
     assert "PAYOUT SIGN-OFF" in text
     assert "Prepared by" in text and "Verified by" in text and "Approved by" in text
+    assert "Total Google reviews collected this month:" in text
