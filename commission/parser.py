@@ -140,6 +140,41 @@ def _find_keyword(line: str) -> tuple[_Keyword, int, int] | None:
     return best
 
 
+def _find_all_keywords(line: str) -> list[tuple[_Keyword, int, int]]:
+    """Return every payment keyword in the line, left to right, as
+    (keyword, start, end). Overlapping matches keep the longest/most-specific
+    one, so 'VISA CREDIT' wins over 'VISA' and 'MASTERCARD' over 'MASTER'.
+
+    This lets a single line carry several payments — e.g. LILY's
+    'DEPOSIT VISA CREDIT 6228 RM681 BALANCE ONLINE TRANSFER RM9000 ...' —
+    instead of collapsing to one method (which would drop the card charge).
+    """
+    upper = line.upper()
+    candidates: list[tuple[int, int, _Keyword]] = []
+    for kw in _KEYWORDS:
+        start = 0
+        while True:
+            idx = upper.find(kw.pattern, start)
+            if idx == -1:
+                break
+            end = idx + len(kw.pattern)
+            start = idx + 1
+            if idx > 0 and upper[idx - 1].isalnum():
+                continue
+            if end < len(upper) and upper[end].isalnum():
+                continue
+            candidates.append((idx, end, kw))
+    # Earliest first; on a tie, the longer match first so it wins the overlap.
+    candidates.sort(key=lambda c: (c[0], -(c[1] - c[0])))
+    picked: list[tuple[_Keyword, int, int]] = []
+    last_end = -1
+    for st, en, kw in candidates:
+        if st >= last_end:
+            picked.append((kw, st, en))
+            last_end = en
+    return picked
+
+
 def _parse_amounts_and_last4(
     line: str, keyword_span: tuple[int, int] | None
 ) -> tuple[list[float], str | None]:
@@ -394,25 +429,41 @@ def parse_seller_note(
             flags.append("No SA detected in note")
 
     # ---- Payment portions -------------------------------------------------
+    # A line can carry several payments (e.g. a card deposit then bank-transfer
+    # balances all typed on one line). Split it at each payment keyword so every
+    # method keeps its own amount and charge; a line with one keyword behaves as
+    # before (all its amounts summed into a single portion).
     payments: list[PaymentPortion] = []
     for line in lines:
-        kw_hit = _find_keyword(line)
-        if not kw_hit:
-            continue
-        kw, start, end = kw_hit
-        method = kw.method
-        if method == PaymentMethod.SENANGPAY_CARD:
-            method = _classify_senangpay(line)
-        amounts, last4 = _parse_amounts_and_last4(line, (start, end))
-        amount = sum(amounts) if amounts else None
-        payments.append(
-            PaymentPortion(
-                method=method,
-                amount=amount,
-                last4=last4,
-                raw_line=line,
+        kws = _find_all_keywords(line)
+        if not kws:
+            kw_hit = _find_keyword(line)  # fuzzy fallback (misspelled TRANSFER)
+            if not kw_hit:
+                continue
+            kws = [kw_hit]
+        # Segment i spans from its own start (segment 0 starts at the line start,
+        # so any leading amount attaches to the first method) to the next
+        # keyword's start.
+        seg_starts = [0] + [kws[i][1] for i in range(1, len(kws))]
+        for i, (kw, kst, ken) in enumerate(kws):
+            seg_start = seg_starts[i]
+            seg_end = seg_starts[i + 1] if i + 1 < len(seg_starts) else len(line)
+            seg = line[seg_start:seg_end]
+            method = kw.method
+            if method == PaymentMethod.SENANGPAY_CARD:
+                method = _classify_senangpay(seg)
+            amounts, last4 = _parse_amounts_and_last4(
+                seg, (kst - seg_start, ken - seg_start)
             )
-        )
+            amount = sum(amounts) if amounts else None
+            payments.append(
+                PaymentPortion(
+                    method=method,
+                    amount=amount,
+                    last4=last4,
+                    raw_line=seg.strip(),
+                )
+            )
 
     if not payments:
         flags.append("No payment method detected in note")

@@ -477,3 +477,26 @@ def test_alipay_recognised_zero_charge_wallet():
     assert _methods(p) == [PaymentMethod.ALIPAY]
     assert p.payments[0].amount == 2500.0
     assert not p.review_flags
+
+
+def test_multiple_methods_on_one_line_split_into_portions():
+    """A whole note typed on ONE line with several payment methods must split
+    into one portion per method — not collapse into a single method (which drops
+    the card charge). LILY's #10253: card deposit + four transfer balances."""
+    p = parse_seller_note(
+        "LILY WALK IN PG DEPOSIT VISA CREDIT 6228 RM681 BALANCE ONLINE "
+        "TRANSFER RM9000 BALANCE ONLINE TRANSFER RM5000 BALANCE ONLINE "
+        "TRANSFER RM9000 BALANCE ONLINE TRANSFER RM4000",
+        order_total=27681.0,
+    )
+    assert _methods(p) == [
+        PaymentMethod.VISA_CREDIT,
+        PaymentMethod.BANK_TRANSFER,
+        PaymentMethod.BANK_TRANSFER,
+        PaymentMethod.BANK_TRANSFER,
+        PaymentMethod.BANK_TRANSFER,
+    ]
+    assert [pp.amount for pp in p.payments] == [681.0, 9000.0, 5000.0, 9000.0, 4000.0]
+    # The card portion keeps its last4 so it can be charged the card rate.
+    assert p.payments[0].last4 == "6228"
+    assert not p.review_flags
