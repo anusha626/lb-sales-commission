@@ -134,6 +134,10 @@ def build_contributions(orders: list[OrderResult]) -> list[SAContribution]:
                         share_pct=share.share,
                         is_clearance=is_clr,
                         discount_share=round(dt * frac * share.share, 2),
+                        prior_flat_paid_share=round(
+                            (getattr(o, "prior_flat_paid", 0.0) or 0.0)
+                            * frac * share.share, 2
+                        ),
                     )
                 )
     return out
@@ -206,6 +210,13 @@ def compute_commissions(
         )
         clearance_net = round(sum(c.net_share for c in clearance), 2)
 
+        # Carry-forward: flat clearance commission already paid last month for
+        # orders now reclassified as normal sales this month — deduct it so the
+        # SA is topped up to the normal commission, not paid twice.
+        prior_flat_deducted = round(
+            sum(getattr(c, "prior_flat_paid_share", 0.0) or 0.0 for c in sa_contribs), 2
+        )
+
         sa_summaries.append(
             SACommission(
                 sa_name=sa,
@@ -215,11 +226,14 @@ def compute_commissions(
                 avg_order_value=avg,
                 tier_rate_pct=tier.rate_pct,
                 tier_label=tier_label,
-                commission_amount=round(normal_commission + clearance_commission, 2),
+                commission_amount=round(
+                    normal_commission + clearance_commission - prior_flat_deducted, 2
+                ),
                 contributions=sorted(sa_contribs, key=lambda c: c.order_date),
                 clearance_order_count=len(clearance),
                 clearance_net_sales=clearance_net,
                 clearance_commission=clearance_commission,
+                prior_flat_deducted=prior_flat_deducted,
             )
         )
 

@@ -645,8 +645,35 @@ def _build_sa_sheet(
     if refunds:
         row, clawback_cell = _sa_refund_table(ws, row, refunds)
 
-    # Commission before bonus = tier + clearance commissions (+ any clawback).
-    before_formula = "=" + "+".join(subtotal_cells) + (f"+{clawback_cell}" if clawback_cell else "")
+    # ---- Carried-forward: deduct flat commission already paid last month ----
+    prior_flat = getattr(sa, "prior_flat_deducted", 0.0) or 0.0
+    prior_flat_cell = None
+    if prior_flat:
+        for col in range(1, _SA_NC + 1):
+            c = ws.cell(row=row, column=col)
+            c.fill = PatternFill("solid", fgColor="FDECEA")
+            c.border = _BORDER
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=10)
+        lbl = ws.cell(
+            row=row, column=1,
+            value="Less: flat commission already paid last month (carried-forward orders)",
+        )
+        lbl.font = Font(bold=True, color="B42318")
+        lbl.alignment = Alignment(horizontal="right", indent=1)
+        vc = ws.cell(row=row, column=11, value=-round(prior_flat, 2))
+        vc.number_format = _MONEY_FMT
+        vc.font = Font(bold=True, color="B42318")
+        vc.alignment = Alignment(horizontal="right")
+        prior_flat_cell = f"K{row}"
+        row += 2
+
+    # Commission before bonus = tier + clearance commissions (+ any clawback,
+    # − any flat already paid on carried-forward orders).
+    before_formula = (
+        "=" + "+".join(subtotal_cells)
+        + (f"+{clawback_cell}" if clawback_cell else "")
+        + (f"+{prior_flat_cell}" if prior_flat_cell else "")
+    )
 
     # ---- "Before bonus" line (only when there's a bonus to add on top) ------
     if bonus_cell:

@@ -10,6 +10,7 @@ Streamlit is only used for UI glue. All calculation lives in `commission/*`.
 from __future__ import annotations
 
 import io
+import json
 from datetime import date, datetime, timedelta
 
 import pandas as pd
@@ -50,6 +51,21 @@ from commission.settings import (
 )
 
 PROJECT_ROOT = Path(__file__).parent
+RECLASS_PATH = PROJECT_ROOT / "data" / "reclassifications.json"
+
+
+def _load_reclassifications() -> dict:
+    """order_number -> {'month': 'YYYY-MM', 'flat_paid': float}."""
+    try:
+        return json.loads(RECLASS_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _save_reclassifications(rc: dict) -> None:
+    RECLASS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    RECLASS_PATH.write_text(json.dumps(rc, indent=2))
+
 
 st.set_page_config(
     page_title="LB Commission Calculator",
@@ -306,6 +322,9 @@ def _ensure_state() -> None:
     # orders whose export carries no transaction date.
     st.session_state.setdefault("settlement_overrides", {})
     st.session_state.setdefault("clearance_skus", set())  # from products export
+    # order_number -> {'month': 'YYYY-MM', 'flat_paid': float}: carry-forward
+    # reclassification (clearance -> normal + move payout month).
+    st.session_state.setdefault("reclassifications", _load_reclassifications())
 
 
 def _reload_settings() -> None:
@@ -652,6 +671,89 @@ def _month_key(d: date) -> str:
     return f"{d.year:04d}-{d.month:02d}"
 
 
+def _apply_reclassifications(
+    orders: list[OrderResult], reclass: dict
+) -> list[OrderResult]:
+    """Carry-forward reclassification: for each order the user flagged, return a
+    copy that is treated as a NORMAL sale (clearance off), moved to the target
+    payout month, and carrying the flat commission already paid last month so it
+    can be deducted. Orders not flagged pass through unchanged."""
+    if not reclass:
+        return orders
+    out: list[OrderResult] = []
+    for o in orders:
+        rc = reclass.get(o.order_number)
+        if not rc:
+            out.append(o)
+            continue
+        base = getattr(o, "settlement_date", None) or o.order_date
+        try:
+            y, m = int(str(rc["month"])[:4]), int(str(rc["month"])[5:7])
+            new_settle = datetime(y, m, 15)
+        except Exception:
+            new_settle = base
+        out.append(o.model_copy(update={
+            "is_clearance": False,
+            "clearance_amount": 0.0,
+            "settlement_date": new_settle,
+            "prior_flat_paid": float(rc.get("flat_paid", 0.0) or 0.0),
+            "carried_from_month": _month_key(base.date()),
+        }))
+    return out
+
+
+def _render_reclass_editor() -> None:
+    """Editor to carry orders forward: reclassify clearance → normal sale, move
+    the payout month, and record any flat commission already paid last month."""
+    rc: dict = st.session_state["reclassifications"]
+    with st.expander(
+        f"↪️ Carry-forward / reclassify orders  ·  {len(rc)} set", expanded=False
+    ):
+        st.caption(
+            "Move an order to a different payout month and treat it as a normal "
+            "sale (e.g. a clearance order that should earn normal commission this "
+            "month). If a flat clearance commission was already paid last month, "
+            "enter it under **Flat already paid** — it is deducted from the new "
+            "commission so the SA is topped up, not paid twice."
+        )
+        rows = [
+            {"Order #": k,
+             "Move to month (YYYY-MM)": v.get("month", ""),
+             "Flat already paid (RM)": float(v.get("flat_paid", 10.0) or 0.0)}
+            for k, v in rc.items()
+        ] or [{"Order #": "", "Move to month (YYYY-MM)": "", "Flat already paid (RM)": 10.0}]
+        edited = st.data_editor(
+            pd.DataFrame(rows),
+            num_rows="dynamic",
+            use_container_width=True,
+            hide_index=True,
+            key="reclass_editor",
+            column_config={
+                "Order #": st.column_config.TextColumn(help="e.g. #10048"),
+                "Move to month (YYYY-MM)": st.column_config.TextColumn(help="e.g. 2026-07"),
+                "Flat already paid (RM)": st.column_config.NumberColumn(format="RM %.2f"),
+            },
+        )
+        if st.button("Save reclassifications"):
+            new: dict = {}
+            for _, r in edited.iterrows():
+                on = str(r["Order #"] or "").strip()
+                mo = str(r["Move to month (YYYY-MM)"] or "").strip()
+                if not on or not mo:
+                    continue
+                if not on.startswith("#"):
+                    on = "#" + on
+                try:
+                    fp = float(r["Flat already paid (RM)"] or 0.0)
+                except (TypeError, ValueError):
+                    fp = 0.0
+                new[on] = {"month": mo, "flat_paid": fp}
+            st.session_state["reclassifications"] = new
+            _save_reclassifications(new)
+            st.success(f"Saved {len(new)} reclassification(s).")
+            st.rerun()
+
+
 def _month_label(key: str) -> str:
     year, month = key.split("-")
     return f"{_MONTH_ABBR[int(month) - 1]} {year}"
@@ -727,6 +829,10 @@ def page_report() -> None:
             "come back here."
         )
         return
+
+    # ---- Carry-forward / reclassify orders ---------------------------------
+    _render_reclass_editor()
+    orders = _apply_reclassifications(orders, st.session_state["reclassifications"])
 
     # ---- Attribute orders to a payout month by *settlement* date -----------
     # Commission for a month is earned on orders whose payment fully cleared
@@ -865,6 +971,14 @@ def page_report() -> None:
                         f"({fmt_money(clr_net)} in sales) — they earn a "
                         f"flat **{fmt_money(clr_comm)}**, already included "
                         f"in Commission. See the “Clearance (flat)” rows below."
+                    )
+
+                prior_flat = getattr(s, "prior_flat_deducted", 0.0)
+                if prior_flat:
+                    st.caption(
+                        f"↪️ Carried-forward orders: **−{fmt_money(prior_flat)}** flat "
+                        f"commission already paid last month has been **deducted** from "
+                        f"Commission (they now earn the normal tier rate)."
                     )
 
                 if getattr(s, "bonus_season", "") and getattr(s, "bonus_amount", 0.0):

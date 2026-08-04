@@ -442,3 +442,26 @@ def test_sa_sheet_has_commission_amendments_table():
         if "TOTAL COMMISSION" in x or "before" in x.lower()
     ]
     assert any(f"K{amend_total_row}" in f for f in totals)
+
+
+def test_carried_forward_order_deducts_prior_flat_paid():
+    """A carried-forward order (clearance last month → normal this month) earns
+    the normal tier commission MINUS the flat clearance commission already paid,
+    so the SA is topped up, not paid twice."""
+    o = _make_order(order_number="#CF", sa_shares=[("MINKEI", 1.0)], gross=5000.0)
+    o.prior_flat_paid = 10.0  # RM10 flat already paid last month
+    report = compute_commissions([o], _default_tiers())
+    s = report.sa_summaries[0]
+    assert s.prior_flat_deducted == 10.0
+    # normal 5000 * 0.8% = 40, minus 10 already paid = 30
+    assert s.commission_amount == 30.0
+
+
+def test_carried_forward_split_deducts_prior_flat_by_share():
+    """The prior flat is deducted per each SA's share of the order."""
+    o = _make_order(order_number="#CF2", sa_shares=[("MICHELLE", 0.7), ("MINKEI", 0.3)], gross=10000.0)
+    o.prior_flat_paid = 10.0
+    report = compute_commissions([o], _default_tiers())
+    by = {s.sa_name: s for s in report.sa_summaries}
+    assert by["MICHELLE"].prior_flat_deducted == 7.0
+    assert by["MINKEI"].prior_flat_deducted == 3.0

@@ -133,6 +133,13 @@ class OrderResult(BaseModel):
     net_total: float = 0.0
     excluded: bool = False
     excluded_reason: str | None = None
+    # Carry-forward reclassification: this order was moved to a different payout
+    # month and/or flipped from clearance to a normal sale (see build_order_results
+    # `reclassifications`). carried_from_month is the original YYYY-MM it settled
+    # in; prior_flat_paid is the flat clearance commission already paid then, to be
+    # deducted from the new (normal) commission this month.
+    carried_from_month: str | None = None
+    prior_flat_paid: float = 0.0
 
     @property
     def needs_review(self) -> bool:
@@ -168,6 +175,9 @@ class SAContribution(BaseModel):
     share_pct: float  # 0..1
     is_clearance: bool = False
     discount_share: float = 0.0  # this SA's portion of the order discount
+    # This SA's portion of a flat clearance commission already paid in a prior
+    # month for a carried-forward order — deducted from the new commission.
+    prior_flat_paid_share: float = 0.0
 
 
 class CommissionTier(BaseModel):
@@ -203,6 +213,9 @@ class SACommission(BaseModel):
     bonus_achieved: float = 0.0
     bonus_tiers: int = 0
     bonus_amount: float = 0.0
+    # Flat clearance commission already paid last month for carried-forward
+    # orders now counted as normal sales — deducted from commission_amount.
+    prior_flat_deducted: float = 0.0
 
 
 class HouseSalesSummary(BaseModel):
