@@ -417,6 +417,69 @@ def _sa_manual_prev_table(
     return row + 2, f"K{row}", f"I{row}"
 
 
+def _sa_amendment_table(ws: Worksheet, row: int, n_rows: int = 4) -> tuple[int, str]:
+    """Manual commission-amendment table for prior-month errors — e.g. an item
+    paid flat clearance last month that should have earned normal commission
+    this month. Enter Order #, Date, Reason, the order Net and what was already
+    paid; Commission-due (Net × tier) and the Adjustment (due − already paid)
+    compute live, and the Adjustment subtotal rolls into the total commission.
+    Returns (next_row, adjustment_subtotal_cell)."""
+    _sa_section(
+        ws, row,
+        "COMMISSION AMENDMENTS  ·  fix prior-month errors — e.g. paid flat "
+        "clearance last month, owed normal commission this month",
+        "92400E",
+    )
+    row += 1
+    heads = {
+        1: "Order #", 2: "Date", 3: "Reason / description",
+        8: "Order net", 9: "Commission due (tier)", 10: "Already paid",
+        11: "Adjustment ±",
+    }
+    ws.merge_cells(start_row=row, start_column=3, end_row=row, end_column=7)
+    for col in range(1, _SA_NC + 1):
+        c = ws.cell(row=row, column=col, value=heads.get(col))
+        c.fill = _HEADER_FILL
+        c.font = _HEADER_FONT
+        c.border = _BORDER
+        c.alignment = Alignment(
+            horizontal="right" if col in (8, 9, 10, 11) else "left",
+            vertical="center",
+        )
+    ws.row_dimensions[row].height = 18
+    row += 1
+    start = row
+    for i in range(n_rows):
+        zebra = _ZEBRA if i % 2 else None
+        for col in range(1, _SA_NC + 1):
+            c = ws.cell(row=row, column=col)
+            c.border = _BORDER
+            if zebra:
+                c.fill = PatternFill("solid", fgColor=zebra)
+        ws.merge_cells(start_row=row, start_column=3, end_row=row, end_column=7)
+        # I = commission due (Net × live tier); K = adjustment (due − already paid)
+        ws.cell(row=row, column=9, value=f'=IF(H{row}="","",H{row}*{_TIER_RATE_REF}/100)')
+        ws.cell(row=row, column=11, value=f'=IF(H{row}="","",I{row}-J{row})')
+        for col in (8, 9, 10, 11):
+            cell = ws.cell(row=row, column=col)
+            cell.number_format = _MONEY_FMT
+            cell.alignment = Alignment(horizontal="right")
+        row += 1
+    for col in range(1, _SA_NC + 1):
+        c = ws.cell(row=row, column=col)
+        c.fill = PatternFill("solid", fgColor=_SUBTOTAL_FILL)
+        c.border = _BORDER
+    lc = ws.cell(row=row, column=1, value="AMENDMENTS TOTAL (added to commission)")
+    lc.font = Font(bold=True, color=_INK)
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=10)
+    lc.alignment = Alignment(horizontal="right", indent=1)
+    cc = ws.cell(row=row, column=11, value=f"=SUM(K{start}:K{row - 1})")
+    cc.number_format = _MONEY_FMT
+    cc.font = Font(bold=True)
+    cc.alignment = Alignment(horizontal="right")
+    return row + 2, f"K{row}"
+
+
 def _sa_bonus_table(ws: Worksheet, row: int, sa: SACommission, achieved_formula: str) -> tuple[int, str]:
     """Overachievement-bonus summary with live formulas. Returns
     (next_row, cash_incentive_cell)."""
@@ -567,6 +630,10 @@ def _build_sa_sheet(
             _GOLD, _CLR_ZEBRA, clearance, rate, flat, "CLEARANCE TOTAL",
         )
         subtotal_cells.append(f"K{sub_r}")
+
+    # ---- Table 3b: manual commission amendments ----------------------------
+    row, amend_cell = _sa_amendment_table(ws, row)
+    subtotal_cells.append(amend_cell)
 
     # ---- Table 4: overachievement bonus (SAs with a scheme) ----------------
     bonus_cell = None

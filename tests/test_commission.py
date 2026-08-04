@@ -414,3 +414,31 @@ def test_sa_sheet_has_manual_missed_previous_month_table():
         if "TOTAL COMMISSION" in x or "before" in x.lower()
     ]
     assert any(f"K{missed_total_row}" in f for f in before_or_grand)
+
+
+def test_sa_sheet_has_commission_amendments_table():
+    """Each SA sheet has a manual 'commission amendments' table whose Adjustment
+    subtotal rolls into the total (for fixing prior-month flat-vs-normal errors)."""
+    import io
+    from openpyxl import load_workbook
+    from commission.excel_export import build_workbook
+    from commission.settings import load_all
+
+    orders = [_make_order(order_number="#A1", sa_shares=[("MINKEI", 1.0)], gross=5000.0)]
+    settings = load_all()
+    report = compute_commissions(orders, settings.tiers)
+    wb = load_workbook(
+        io.BytesIO(build_workbook(orders, report, settings, all_orders=orders))
+    )
+    ws = wb["SA - MINKEI"]
+    labels = [str(ws.cell(row=r, column=1).value or "") for r in range(1, ws.max_row + 1)]
+    assert any("COMMISSION AMENDMENTS" in x for x in labels)
+    amend_total_row = next(
+        r for r, x in enumerate(labels, start=1) if "AMENDMENTS TOTAL" in x
+    )
+    totals = [
+        str(ws.cell(row=r, column=11).value or "")
+        for r, x in enumerate(labels, start=1)
+        if "TOTAL COMMISSION" in x or "before" in x.lower()
+    ]
+    assert any(f"K{amend_total_row}" in f for f in totals)
