@@ -220,3 +220,17 @@ def test_blank_fulfillment_status_is_not_excluded():
     df = _df([_row(**{"Order Number": "#NB", "Financial Status": "Paid"})])
     o = build_order_results(df, settings)[0]
     assert not o.excluded
+
+
+def test_restocked_order_counts_as_sale():
+    """A fully-paid 'Restocked' order is a completed sale and must count
+    (per the user's rule), unlike Unfulfilled / Partially Fulfilled."""
+    settings = load_all()
+    df = _df(
+        [
+            _row(**{"Order Number": "#RS", "Financial Status": "Paid",
+                    "Fulfillment Status": "Restocked"}),
+        ]
+    )
+    o = build_order_results(df, settings)[0]
+    assert not o.excluded

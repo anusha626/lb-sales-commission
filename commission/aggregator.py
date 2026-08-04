@@ -213,11 +213,13 @@ def _excluded_reason(
     fin = financial_status.lower()
     if not include_unpaid and fin and fin != "paid":
         return f"Financial status: {financial_status}"
-    # A sale counts only when it is both Paid AND Fulfilled. Anything other than
-    # "Fulfilled" (Unfulfilled, Partially Fulfilled, Restocked) is held out. A
-    # blank status (or a CSV without the column) is left in for compatibility.
+    # A sale counts only when it is Paid AND completed. "Fulfilled" and
+    # "Restocked" both count — Restocked is a completed, fully-paid sale whose
+    # stock was later adjusted, per the user's rule. Unfulfilled / Partially
+    # Fulfilled are held out. A blank status (or a CSV without the column) is
+    # left in for compatibility.
     ful = fulfillment_status.lower()
-    if not include_unfulfilled and ful and ful != "fulfilled":
+    if not include_unfulfilled and ful and ful not in ("fulfilled", "restocked"):
         return f"Fulfillment status: {fulfillment_status}"
     return None
 
