@@ -359,14 +359,16 @@ def _has_deposit_flag(p):
     return any("Deposit line has no payment method" in f for f in p.review_flags)
 
 
-def test_deposit_transfer_without_method_flagged():
-    """'DEPOSIT TRANSFER RM1000' names no recognised method — flag for Review
-    instead of letting the card portion absorb (and over-charge) it."""
+def test_deposit_transfer_is_bank_transfer_not_flagged():
+    """'DEPOSIT TRANSFER' means a bank/online-transfer deposit — recognise it as
+    its own BANK_TRANSFER portion (not flagged, not absorbed by the card)."""
     p = parse_seller_note(
         "LILY WALK IN PJ\nDEPOSIT TRANSFER RM1000\nVISA 8407 RM5990",
         order_total=6990.0,
     )
-    assert _has_deposit_flag(p)
+    assert _methods(p) == [PaymentMethod.BANK_TRANSFER, PaymentMethod.VISA_CREDIT]
+    assert [pp.amount for pp in p.payments] == [1000.0, 5990.0]
+    assert not _has_deposit_flag(p)
 
 
 def test_bare_deposit_without_method_flagged():
@@ -531,3 +533,15 @@ def test_rm_amount_not_read_as_percent_split():
     """Guard: 'CASH RM50' must not be read as a 50% share for a lone SA."""
     p = parse_seller_note("MINKEI\nWALK IN\nCASH RM50", order_total=50.0)
     assert _names(p) == [("MINKEI", 1.0)]
+
+
+def test_bare_transfer_word_is_bank_transfer():
+    """Any 'TRANSFER' (even bare, no ONLINE/BANK qualifier) means bank/online
+    transfer — LILY's 'DEPOSIT TRANSFER' + a card balance."""
+    p = parse_seller_note(
+        "LILY\nCHATDADDY\nDEPOSIT TRANSFER RM5000\nVISA 1234 RM3000",
+        order_total=8000.0,
+    )
+    assert _methods(p) == [PaymentMethod.BANK_TRANSFER, PaymentMethod.VISA_CREDIT]
+    assert [pp.amount for pp in p.payments] == [5000.0, 3000.0]
+    assert not p.review_flags

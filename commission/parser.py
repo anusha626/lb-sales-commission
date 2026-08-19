@@ -55,6 +55,9 @@ _KEYWORDS: tuple[_Keyword, ...] = (
     _Keyword("TIKTOK PAY", PaymentMethod.TIKTOK),
     _Keyword("ONLINE TRANSFER", PaymentMethod.BANK_TRANSFER),
     _Keyword("BANK TRANSFER", PaymentMethod.BANK_TRANSFER),
+    # Bare "TRANSFER" means bank/online transfer (per LILY's notes, e.g.
+    # "DEPOSIT TRANSFER"); the two-word forms above win when present.
+    _Keyword("TRANSFER", PaymentMethod.BANK_TRANSFER),
     _Keyword("TOUCH AND GO", PaymentMethod.TNG),
     _Keyword("TOUCH N GO", PaymentMethod.TNG),
     _Keyword("TRADE IN", PaymentMethod.TRADE_IN),
@@ -133,9 +136,8 @@ def _find_keyword(line: str) -> tuple[_Keyword, int, int] | None:
     if best is None and ("ONLINE" in upper or "BANK" in upper):
         # Fuzzy fallback for a misspelled "TRANSFER" (e.g. "ONLINE TRASNFER",
         # "BANK TRANFER"). Only runs when no exact keyword matched AND the line
-        # carries an ONLINE/BANK qualifier, so a bare "DEPOSIT TRANSFER" still
-        # flags for Review and no card/e-wallet method gets overridden.
-        # Online transfer == bank transfer.
+        # carries an ONLINE/BANK qualifier. Bare (correctly-spelled) "TRANSFER"
+        # is already an exact keyword; this just rescues typos.
         for m in re.finditer(r"[A-Z]{6,}", upper):
             if fuzz.ratio(m.group(0), "TRANSFER") >= 85:
                 best = (_TRANSFER_KW, m.start(), m.end())
@@ -560,9 +562,9 @@ def parse_seller_note(
 
     # Deposit line with no identifiable payment method → send to Review rather
     # than letting another portion silently absorb it (which over-charges the
-    # card rate on the deposit). Covers "DEPOSIT TRANSFER RM1000" and a bare
-    # "DEPOSIT RM1000"; a deposit that DOES name a method ("DEPOSIT CASH RM500",
-    # "DEPO ONLINE TRANSFER ...") is recognised and not flagged.
+    # card rate on the deposit). Covers a bare "DEPOSIT RM1000" with no method;
+    # a deposit that DOES name a method ("DEPOSIT CASH RM500", "DEPOSIT TRANSFER
+    # RM1000", "DEPO ONLINE TRANSFER ...") is recognised and not flagged.
     for line in lines:
         if re.search(r"\bDEPO", line) and _AMOUNT_RE.search(line) and _find_keyword(line) is None:
             flags.append(
