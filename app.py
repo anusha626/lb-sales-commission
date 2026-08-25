@@ -67,6 +67,37 @@ def _save_reclassifications(rc: dict) -> None:
     RECLASS_PATH.write_text(json.dumps(rc, indent=2))
 
 
+def _build_version() -> str:
+    """Short git commit + date of the running build, so a reboot is visible.
+    Computed once per app start (module load); falls back to 'unknown'."""
+    import subprocess
+    try:
+        sha = subprocess.check_output(
+            ["git", "-C", str(PROJECT_ROOT), "rev-parse", "--short", "HEAD"],
+            text=True, stderr=subprocess.DEVNULL, timeout=5,
+        ).strip()
+        dt = subprocess.check_output(
+            ["git", "-C", str(PROJECT_ROOT), "log", "-1",
+             "--format=%cd", "--date=format:%Y-%m-%d %H:%M"],
+            text=True, stderr=subprocess.DEVNULL, timeout=5,
+        ).strip()
+        return f"{sha} · {dt}"
+    except Exception:
+        pass
+    # Fallback (no git in the container): newest source-file mtime, which on
+    # Streamlit Cloud equals the deploy/clone time — still changes each reboot.
+    try:
+        import datetime as _dt
+        files = list((PROJECT_ROOT / "commission").glob("*.py")) + [PROJECT_ROOT / "app.py"]
+        newest = max(f.stat().st_mtime for f in files if f.exists())
+        return "deployed " + _dt.datetime.fromtimestamp(newest).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return "unknown"
+
+
+_BUILD_VERSION = _build_version()
+
+
 st.set_page_config(
     page_title="LB Commission Calculator",
     page_icon="💼",
@@ -1359,6 +1390,7 @@ def main() -> None:
         label_visibility="collapsed",
     )
     st.sidebar.divider()
+    st.sidebar.caption(f"🔖 Build `{_BUILD_VERSION}`")
     settings: AppSettings = st.session_state["settings"]
     st.sidebar.caption(
         f"**Active SAs:** {', '.join(settings.sa_list.active_names) or '(none)'}\n\n"
