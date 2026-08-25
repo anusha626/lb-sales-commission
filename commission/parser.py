@@ -332,6 +332,52 @@ def _detect_amount_shares(
     return shares
 
 
+def _detect_positional_amount_shares(
+    note: str, sa_pool: list[str]
+) -> list[SAShare] | None:
+    """Sectioned amount split: the note names 2+ SAs, each starting a block with
+    their own payment amounts somewhere after the name (not adjacent to it), e.g.
+    'LILY ... ONLINE TRANSFER DEPOSIT RM1298 BALANCE CASH RM7000 NISA WALK IN SS2
+    CASH RM1490'. Each RM amount is attributed to the nearest SA name that
+    precedes it, then shares are amount / sum(amounts). Returns None unless 2+
+    distinct SAs each end up with an amount.
+    """
+    upper = note.upper()
+    # SA-name occurrences (single-word tokens matched to the pool), left to right.
+    name_hits: list[tuple[int, str]] = []
+    for m in re.finditer(r"[A-Z]{2,}", upper):
+        canonical = _best_sa_match(m.group(0), sa_pool)
+        if canonical is not None:
+            name_hits.append((m.start(), canonical))
+    if len({n for _, n in name_hits}) < 2:
+        return None  # need at least two different SAs named
+
+    totals: dict[str, float] = {}
+    order: list[str] = []
+    for m in _AMOUNT_RE.finditer(note):
+        try:
+            amount = float(m.group(1).replace(",", ""))
+        except ValueError:
+            continue
+        if amount <= 0:
+            continue
+        # nearest SA name whose position precedes this amount (fallback: first)
+        preceding = [n for pos, n in name_hits if pos < m.start()]
+        canonical = preceding[-1] if preceding else name_hits[0][1]
+        if canonical not in totals:
+            totals[canonical] = 0.0
+            order.append(canonical)
+        totals[canonical] += amount
+
+    named = [n for n in order if totals.get(n, 0.0) > 0]
+    if len(named) < 2:
+        return None
+    grand = sum(totals[n] for n in named)
+    if grand <= 0:
+        return None
+    return [SAShare(name=n, share=round(totals[n] / grand, 6)) for n in named]
+
+
 def _detect_single_sa(note: str, sa_pool: list[str]) -> SAShare | None:
     """Detect a single SA name in the note (fuzzy match, first match wins)."""
     upper = note.upper()
@@ -430,7 +476,11 @@ def parse_seller_note(
     # ---- SA shares --------------------------------------------------------
     sa_shares: list[SAShare] = []
     split = _detect_split_shares(upper_note, sa_pool)
-    amount_split = split or _detect_amount_shares(upper_note, sa_pool, order_total)
+    amount_split = (
+        split
+        or _detect_amount_shares(upper_note, sa_pool, order_total)
+        or _detect_positional_amount_shares(upper_note, sa_pool)
+    )
     if amount_split:
         sa_shares = amount_split
     else:

@@ -545,3 +545,25 @@ def test_bare_transfer_word_is_bank_transfer():
     assert _methods(p) == [PaymentMethod.BANK_TRANSFER, PaymentMethod.VISA_CREDIT]
     assert [pp.amount for pp in p.payments] == [5000.0, 3000.0]
     assert not p.review_flags
+
+
+def test_positional_amount_split_two_sa_sections():
+    """Two SAs each with their own section and payment amounts (not adjacent to
+    the name): LILY's block + NISA's block. Shares are each SA's summed amounts
+    over the total, not 100% to the first-named SA."""
+    p = parse_seller_note(
+        "LILY TIKTOK/WHATSAP ONLINE TRANSFER DEPOSIT RM1298 BALANCE CASH RM7000 "
+        "NISA WALK IN SS2 CASH RM1490",
+        order_total=9788.0,
+        sa_list=["LILY", "NISA", "MINKEI", "CHLOE"],
+    )
+    shares = {s.name: round(s.share, 4) for s in p.sa_shares}
+    assert shares == {"LILY": round(8298 / 9788, 4), "NISA": round(1490 / 9788, 4)}
+
+
+def test_single_sa_multiple_payments_stays_100pct():
+    """One SA with several payment lines is NOT a positional split — still 100%."""
+    p = parse_seller_note(
+        "MINKEI\nWALK IN PJ\nCASH RM500\nTRANSFER RM1000", order_total=1500.0
+    )
+    assert _names(p) == [("MINKEI", 1.0)]
