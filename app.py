@@ -356,6 +356,10 @@ def _ensure_state() -> None:
     # order_number -> {'month': 'YYYY-MM', 'flat_paid': float}: carry-forward
     # reclassification (clearance -> normal + move payout month).
     st.session_state.setdefault("reclassifications", _load_reclassifications())
+    # Metadata about the currently-loaded CSV (name, rows, load time) so the
+    # user can confirm which file the figures come from.
+    st.session_state.setdefault("data_meta", None)
+    st.session_state.setdefault("data_sig", None)
 
 
 def _reload_settings() -> None:
@@ -407,7 +411,15 @@ def page_upload() -> None:
         try:
             df = read_easystore_csv(upl.getvalue())
             st.session_state["df"] = df
-            st.success(f"Loaded {len(df)} rows.")
+            sig = (upl.name, getattr(upl, "size", len(upl.getvalue())))
+            if st.session_state.get("data_sig") != sig:
+                st.session_state["data_sig"] = sig
+                st.session_state["data_meta"] = {
+                    "name": upl.name,
+                    "rows": len(df),
+                    "loaded_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                }
+            st.success(f"Loaded {len(df)} rows from **{upl.name}**.")
         except Exception as e:
             st.error(f"Couldn't read CSV: {e}")
             return
@@ -842,8 +854,21 @@ def _render_settlement_entry(
             st.rerun()
 
 
+def _render_data_loaded_line() -> None:
+    """Show which CSV the current figures come from (name, rows, load time)."""
+    meta = st.session_state.get("data_meta")
+    if meta:
+        st.caption(
+            f"📄 Data loaded: **{meta['name']}** · {meta['rows']} rows · "
+            f"loaded {meta['loaded_at']}"
+        )
+    else:
+        st.caption("📄 No CSV metadata — re-upload on **Upload & Review** to stamp it.")
+
+
 def page_report() -> None:
     st.title("Commission Report")
+    _render_data_loaded_line()
 
     orders = st.session_state.get("orders")
     settings: AppSettings = st.session_state["settings"]
