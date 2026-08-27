@@ -567,3 +567,25 @@ def test_single_sa_multiple_payments_stays_100pct():
         "MINKEI\nWALK IN PJ\nCASH RM500\nTRANSFER RM1000", order_total=1500.0
     )
     assert _names(p) == [("MINKEI", 1.0)]
+
+
+def test_bank_debit_without_network_flagged_not_cash():
+    """'MBB DEBIT' (bank debit, no Visa/Mastercard/MyDebit) keeps its amount but
+    is marked UNKNOWN and flagged for Review — never silently treated as cash."""
+    p = parse_seller_note(
+        "LILY\nWALK IN\nPG\nMBB DEBIT 2701 RM6990", order_total=6990.0
+    )
+    assert _methods(p) == [PaymentMethod.UNKNOWN]
+    assert p.payments[0].amount == 6990.0
+    assert p.payments[0].last4 == "2701"
+    assert any("Debit card network not specified" in f for f in p.review_flags)
+
+
+def test_qualified_debit_still_resolves():
+    for note, expect in [
+        ("LILY\nVISA DEBIT 1234 RM500", PaymentMethod.VISA_DEBIT),
+        ("LILY\nDEBIT MASTERCARD 6506 RM500", PaymentMethod.MASTERCARD_DEBIT),
+        ("LILY\nMYDEBIT 7656 RM500", PaymentMethod.MYDEBIT),
+    ]:
+        p = parse_seller_note(note, order_total=500.0)
+        assert _methods(p) == [expect]
