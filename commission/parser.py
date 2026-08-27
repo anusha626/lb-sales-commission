@@ -78,12 +78,6 @@ _KEYWORDS: tuple[_Keyword, ...] = (
     _Keyword("TNG", PaymentMethod.TNG),
     _Keyword("ALIPAY", PaymentMethod.ALIPAY),
     _Keyword("ALI PAY", PaymentMethod.ALIPAY),
-    # A bank debit with no network stated ("MBB DEBIT", bare "DEBIT"): capture
-    # the amount but mark it UNKNOWN and flag it, so the user picks the exact
-    # debit network (Visa/Mastercard/MyDebit) in Review — the merchant rates
-    # differ. The qualified forms (VISA DEBIT / DEBIT MASTERCARD / MYDEBIT) win
-    # by longest-match.
-    _Keyword("DEBIT", PaymentMethod.UNKNOWN),
     _Keyword("CASH", PaymentMethod.CASH),
 )
 
@@ -548,11 +542,6 @@ def parse_seller_note(
             )
         else:
             flags.append("No payment method detected in note")
-    if any(p.method == PaymentMethod.UNKNOWN for p in payments):
-        flags.append(
-            "Debit card network not specified (e.g. 'MBB DEBIT') — set Visa "
-            "Debit / Mastercard Debit / MyDebit in Review"
-        )
 
     # ---- Allocate implicit remainder & validate sum -----------------------
     explicit_sum = sum(p.amount for p in payments if p.amount is not None)
