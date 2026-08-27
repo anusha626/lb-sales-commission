@@ -589,3 +589,24 @@ def test_qualified_debit_still_resolves():
     ]:
         p = parse_seller_note(note, order_total=500.0)
         assert _methods(p) == [expect]
+
+
+def test_tiktok_shop_bare_tiktok_defaults_to_tiktok_payment():
+    """A TikTok-Shop order whose note just says 'TIKTOK' (not a recognised
+    payment keyword) defaults to a TikTok payment for the order total, rather
+    than flagging 'no payment method'."""
+    p = parse_seller_note(
+        "COMPANY SALES 70% CHRISTY 30%\nTIKTOK\nTIKTOK RM2453.07",
+        order_total=2453.07,
+        channel="tiktok-shop",
+        sa_list=["CHRISTY", "LILY"],
+    )
+    assert _methods(p) == [PaymentMethod.TIKTOK]
+    assert p.payments[0].amount == 2453.07
+    assert not any("No payment method" in f for f in p.review_flags)
+
+
+def test_non_tiktok_channel_still_flags_missing_method():
+    p = parse_seller_note("LILY\nWALK IN\nSOMETHING RM500", order_total=500.0,
+                          channel="admin_panel")
+    assert any("No payment method" in f for f in p.review_flags)

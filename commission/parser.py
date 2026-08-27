@@ -534,7 +534,20 @@ def parse_seller_note(
             )
 
     if not payments:
-        flags.append("No payment method detected in note")
+        if (channel or "").lower() == "tiktok-shop":
+            # TikTok Shop order paid through the TikTok platform — the note often
+            # just says "TIKTOK" (not a recognised payment keyword like "TIKTOK
+            # PAYMENT"). Default to a TikTok payment for the order total instead
+            # of flagging "no payment method".
+            payments.append(
+                PaymentPortion(
+                    method=PaymentMethod.TIKTOK,
+                    amount=None,  # implicit -> order total
+                    raw_line="TIKTOK (channel default)",
+                )
+            )
+        else:
+            flags.append("No payment method detected in note")
     if any(p.method == PaymentMethod.UNKNOWN for p in payments):
         flags.append(
             "Debit card network not specified (e.g. 'MBB DEBIT') — set Visa "
