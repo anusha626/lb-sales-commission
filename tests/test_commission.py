@@ -465,3 +465,21 @@ def test_carried_forward_split_deducts_prior_flat_by_share():
     by = {s.sa_name: s for s in report.sa_summaries}
     assert by["MICHELLE"].prior_flat_deducted == 7.0
     assert by["MINKEI"].prior_flat_deducted == 3.0
+
+
+def test_event_window_flat_rate_and_counts_in_tier():
+    """Orders dated in an event window earn a flat event rate regardless of the
+    SA's tier, but still count toward the monthly net that sets the tier for
+    non-event orders."""
+    from datetime import datetime
+    non = _make_order(order_number="#NON", sa_shares=[("MINKEI", 1.0)], gross=400000.0,
+                      date=datetime(2026, 8, 10))
+    ev = _make_order(order_number="#EVT", sa_shares=[("MINKEI", 1.0)], gross=10000.0,
+                     date=datetime(2026, 8, 28))
+    ev.event_rate = 0.8
+    report = compute_commissions([non, ev], _default_tiers())
+    s = report.sa_summaries[0]
+    assert s.total_net_sales == 410000.0        # event counts toward the total
+    assert s.tier_rate_pct == 1.2               # 410k -> top bracket
+    # non-event 400k @ 1.2% = 4800 ; event 10k @ 0.8% = 80
+    assert s.commission_amount == 4880.0

@@ -140,6 +140,10 @@ class OrderResult(BaseModel):
     # deducted from the new (normal) commission this month.
     carried_from_month: str | None = None
     prior_flat_paid: float = 0.0
+    # Event promo: when set, this order (dated inside a promo window) earns this
+    # flat commission rate (%) instead of the tier rate; clearance is treated as
+    # a normal sale and counted toward the monthly total.
+    event_rate: float | None = None
 
     @property
     def needs_review(self) -> bool:

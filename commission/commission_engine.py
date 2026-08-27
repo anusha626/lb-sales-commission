@@ -200,8 +200,12 @@ def compute_commissions(
         normal_commission = 0.0
         for c in normal:
             order = by_number.get(c.order_number)
+            event_rate = getattr(order, "event_rate", None) if order else None
             flat = _flat_rule_for_order(order, tiers_cfg) if order else None
-            if flat is not None:
+            if event_rate is not None:
+                # Event-window order: flat event rate on net, regardless of tier.
+                normal_commission += c.net_share * event_rate / 100.0
+            elif flat is not None:
                 normal_commission += flat.amount_per_order * c.share_pct
             else:
                 normal_commission += c.net_share * tier.rate_pct / 100.0

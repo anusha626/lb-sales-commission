@@ -38,6 +38,7 @@ from commission.settings import (
     ChannelFlatRule,
     ChannelSaleSplit,
     CommissionTier,
+    EventPeriod,
     RATES_FILE,
     RateRow,
     RateTableVersion,
@@ -323,7 +324,11 @@ def _contribution_row(contribution, order, *, tier_rate_pct=None, tiers_cfg=None
             if (order is not None and tiers_cfg is not None)
             else None
         )
-        if is_clearance and tiers_cfg is not None:
+        event_rate = getattr(order, "event_rate", None) if order is not None else None
+        if event_rate is not None:
+            commission = round(contribution.net_share * event_rate / 100.0, 2)
+            kind = f"Event ({event_rate}%)"
+        elif is_clearance and tiers_cfg is not None:
             commission = round(tiers_cfg.clearance_flat_amount * contribution.share_pct, 2)
             kind = "Clearance (flat)"
         elif flat_rule is not None:
@@ -1354,6 +1359,34 @@ def page_settings() -> None:
             },
         )
 
+        st.subheader("Event periods (flat-rate promo windows)")
+        st.caption(
+            "Every order DATED inside a window earns the flat rate below "
+            "regardless of tier. Clearance orders in the window are treated as "
+            "normal sales and counted in the total; event sales also count "
+            "toward the monthly net that sets the tier for non-event orders. "
+            "Dates are inclusive, format YYYY-MM-DD."
+        )
+        event_df = pd.DataFrame(
+            [
+                {"Start": str(e.start), "End": str(e.end),
+                 "Rate %": e.rate_pct, "Label": e.label}
+                for e in settings.tiers.event_periods
+            ]
+            or [{"Start": "", "End": "", "Rate %": 0.8, "Label": ""}]
+        )
+        event_edit = st.data_editor(
+            event_df,
+            num_rows="dynamic",
+            key="event_editor",
+            use_container_width=True,
+            column_config={
+                "Start": st.column_config.TextColumn(help="e.g. 2026-08-27"),
+                "End": st.column_config.TextColumn(help="e.g. 2026-08-31"),
+                "Rate %": st.column_config.NumberColumn(format="%.2f%%"),
+            },
+        )
+
         if st.button("Save tiers + flat rules"):
             new_tiers: list[CommissionTier] = []
             for _, r in tier_edit.iterrows():
@@ -1388,9 +1421,30 @@ def page_settings() -> None:
                         label=str(r["Label"] or ""),
                     )
                 )
+            from datetime import date as _date
+            new_events: list[EventPeriod] = []
+            for _, r in event_edit.iterrows():
+                start_s = str(r["Start"] or "").strip()
+                end_s = str(r["End"] or "").strip()
+                if not start_s or not end_s:
+                    continue
+                try:
+                    start_d = _date.fromisoformat(start_s)
+                    end_d = _date.fromisoformat(end_s)
+                except ValueError:
+                    st.error(f"Bad event date: {start_s} / {end_s} (use YYYY-MM-DD)")
+                    continue
+                new_events.append(
+                    EventPeriod(
+                        start=start_d, end=end_d,
+                        rate_pct=float(r["Rate %"] or 0),
+                        label=str(r["Label"] or ""),
+                    )
+                )
             settings.tiers.tiers = new_tiers
             settings.tiers.channel_flat_commissions = new_flat
             settings.tiers.channel_sale_splits = new_splits
+            settings.tiers.event_periods = new_events
             save_tiers(settings.tiers)
             _reload_settings()
             _save_and_sync(TIERS_FILE, "Tiers and channel flat rules")

@@ -282,6 +282,12 @@ def build_order_results(
             sku_clr = 0.0
         clearance_amount = min(max(note_clr, sku_clr), gross) if gross else max(note_clr, sku_clr)
         is_clearance = clearance_amount >= gross > 0  # fully clearance
+        # Event promo: an order DATED inside a promo window earns a flat rate and
+        # its clearance (if any) is treated as a normal sale counted in totals.
+        event_rate = settings.tiers.event_rate_for(order_date.date())
+        if event_rate is not None:
+            clearance_amount = 0.0
+            is_clearance = False
         discount_total = float(row.get("__discount_amount__") or 0.0)
         channel = row.get("Channel", "") or ""
         order_status = row.get("Order Status", "") or ""
@@ -322,6 +328,7 @@ def build_order_results(
                     order_status=order_status,
                     gross_total=gross,
                     discount_total=discount_total,
+                    event_rate=event_rate,
                     parsed=parsed,
                     tags=tags,
                     charges=[],
@@ -355,6 +362,7 @@ def build_order_results(
                 order_status=order_status,
                 gross_total=gross,
                 discount_total=discount_total,
+                event_rate=event_rate,
                 parsed=parsed,
                 tags=tags,
                 charges=charge_lines,

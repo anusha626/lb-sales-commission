@@ -176,8 +176,11 @@ def _sa_order_data(c, order, tiers_cfg, tier_rate_pct) -> dict:
     clearance); charges come from this portion's gross − net."""
     charges_share = round(c.gross_share - c.net_share, 2)
     is_clr = getattr(c, "is_clearance", False)
+    event_rate = getattr(order, "event_rate", None) if order is not None else None
     flat_rule = tiers_cfg.flat_rule_for(order.channel) if order is not None else None
-    if is_clr:
+    if event_rate is not None:
+        commission = round(c.net_share * event_rate / 100.0, 2)
+    elif is_clr:
         commission = round(tiers_cfg.clearance_flat_amount * c.share_pct, 2)
     elif flat_rule is not None:
         commission = round(flat_rule.amount_per_order * c.share_pct, 2)
@@ -199,6 +202,7 @@ def _sa_order_data(c, order, tiers_cfg, tier_rate_pct) -> dict:
         "share": c.share_pct,
         "commission": commission,
         "is_clr": is_clr,
+        "event_rate": event_rate,
     }
 
 
@@ -244,6 +248,9 @@ def _sa_order_row(
     ws.cell(row=row, column=10, value=d["share"])                 # J: share % (value)
     if blank_commission:
         ws.cell(row=row, column=11, value=None)                   # reference row
+    elif d.get("event_rate") is not None:
+        # Event-window order: flat event rate on net, regardless of tier.
+        ws.cell(row=row, column=11, value=f"=I{row}*{d['event_rate']}/100")
     elif d["is_clr"]:
         # K: flat RM per ORDER, split by this SA's share (J). A 30% share on a
         # clearance order earns 30% × RM10 = RM3 — matching the engine and the

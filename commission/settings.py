@@ -78,6 +78,19 @@ class ChannelSaleSplit(BaseModel):
     label: str = ""
 
 
+class EventPeriod(BaseModel):
+    """A promo window: every order DATED within [start, end] earns a flat
+    `rate_pct` (e.g. 0.8%) regardless of the SA's tier bracket. Clearance orders
+    in the window are treated as normal sales (no flat RM10) and counted toward
+    the monthly total. Event sales also count toward the monthly net that sets
+    the tier for non-event orders."""
+
+    start: date
+    end: date
+    rate_pct: float
+    label: str = ""
+
+
 class TiersConfig(BaseModel):
     tiers: list[CommissionTier]
     channel_flat_commissions: list[ChannelFlatRule] = Field(default_factory=list)
@@ -89,12 +102,24 @@ class TiersConfig(BaseModel):
     # "SALES JUNE" both qualify.
     clearance_tag: str = "SALES JUNE"
     clearance_flat_amount: float = 10.0
+    # Promo windows: order dated inside one earns event.rate_pct flat.
+    event_periods: list[EventPeriod] = Field(default_factory=list)
 
     def flat_rule_for(self, channel: str) -> ChannelFlatRule | None:
         ch = (channel or "").lower()
         for r in self.channel_flat_commissions:
             if r.channel.lower() == ch:
                 return r
+        return None
+
+    def event_rate_for(self, on: "date | None") -> float | None:
+        """Flat commission rate (%) for an order dated `on` if it falls in a
+        promo event window, else None."""
+        if on is None:
+            return None
+        for e in self.event_periods:
+            if e.start <= on <= e.end:
+                return e.rate_pct
         return None
 
     def sale_split_for(self, channel: str) -> float | None:
