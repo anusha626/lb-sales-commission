@@ -67,6 +67,10 @@
     {
       "name": "FATIN",
       "active": true
+    },
+    {
+      "name": "FIFY",
+      "active": true
     }
   ]
 }
