@@ -248,3 +248,16 @@ def test_force_include_overrides_status_exclusion():
     assert not by["#KEEP"].excluded
     assert by["#KEEP"].net_total > 0          # re-costed, not zeroed
     assert by["#DROP"].excluded               # others unaffected
+
+
+def test_store_credit_deducted_from_gross():
+    """'Credit Used' (store credit the customer already had) is deducted from
+    the gross, since EasyStore's Total Amount doesn't subtract it. #10341:
+    Total 1990 - credit 29.90 = 1960.10 gross."""
+    settings = load_all()
+    df = _df([
+        _row(**{"Order Number": "#CR", "Total Amount": "1990.00",
+                "Credit Used": "-29.90", "Note": "CHRISTY\nCASH RM1960.10"}),
+    ])
+    o = build_order_results(df, settings)[0]
+    assert o.gross_total == 1960.10

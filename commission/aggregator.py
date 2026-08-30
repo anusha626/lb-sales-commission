@@ -263,6 +263,14 @@ def build_order_results(
             settlement_date = note_paid
 
         gross = _parse_total(row["Total Amount"])
+        # Store credit ("Credit Used") is money the customer already had (from a
+        # prior refund/deposit), not new revenue — deduct it from the gross so
+        # commission is on what was actually paid this sale. EasyStore's Total
+        # Amount does NOT subtract it, so we do. (Point/voucher credits are not
+        # deducted here — only store credit.)
+        credit_used = abs(_parse_total(row.get("Credit Used", "") or "0"))
+        if credit_used:
+            gross = round(max(0.0, gross - credit_used), 2)
         # Clearance = the larger of the note tag ("SALES JUNE …") and the
         # clearance-SKU line-item total, capped at the order gross.
         note_clr = settings.tiers.clearance_amount_from_note(note_text, gross)
