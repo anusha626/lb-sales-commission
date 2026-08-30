@@ -202,25 +202,17 @@ def _paid_month_from_note(note: str, order_date: datetime) -> datetime | None:
 
 
 def _excluded_reason(
-    order_status: str,
-    financial_status: str,
-    fulfillment_status: str,
-    include_unpaid: bool,
-    include_unfulfilled: bool,
+    order_status: str, financial_status: str, include_unpaid: bool,
 ) -> str | None:
     if order_status.lower() == "cancelled":
         return "Order cancelled"
     fin = financial_status.lower()
+    # Rule: as long as the order is fully Paid, it counts toward commission —
+    # fulfillment status (Unfulfilled / Partially Fulfilled / Restocked) is not
+    # a gate. "Partially Paid" / "Unpaid" / "Cash On Delivery" are NOT fully
+    # paid, so they are held out unless the user opts in with include_unpaid.
     if not include_unpaid and fin and fin != "paid":
         return f"Financial status: {financial_status}"
-    # A sale counts only when it is Paid AND completed. "Fulfilled" and
-    # "Restocked" both count — Restocked is a completed, fully-paid sale whose
-    # stock was later adjusted, per the user's rule. Unfulfilled / Partially
-    # Fulfilled are held out. A blank status (or a CSV without the column) is
-    # left in for compatibility.
-    ful = fulfillment_status.lower()
-    if not include_unfulfilled and ful and ful not in ("fulfilled", "restocked"):
-        return f"Fulfillment status: {fulfillment_status}"
     return None
 
 
@@ -229,7 +221,6 @@ def build_order_results(
     settings: AppSettings,
     *,
     include_unpaid: bool = False,
-    include_unfulfilled: bool = False,
     date_from: date | None = None,
     date_to: date | None = None,
     overrides: dict[str, ParsedNote] | None = None,
@@ -293,12 +284,10 @@ def build_order_results(
         channel = row.get("Channel", "") or ""
         order_status = row.get("Order Status", "") or ""
         financial_status = row.get("Financial Status", "") or ""
-        fulfillment_status = row.get("Fulfillment Status", "") or ""
         tags = _parse_tags(row.get(TAG_COL, "") or "")
 
         excluded_reason = _excluded_reason(
-            order_status, financial_status, fulfillment_status,
-            include_unpaid, include_unfulfilled
+            order_status, financial_status, include_unpaid
         )
         # Force-include: the user explicitly wants this order counted even though
         # a status filter would drop it (e.g. a paid-but-Unfulfilled sale). It

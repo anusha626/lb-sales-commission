@@ -391,7 +391,6 @@ def _reload_settings() -> None:
 def _recompute_orders(
     *,
     include_unpaid: bool,
-    include_unfulfilled: bool = False,
     date_from: date | None,
     date_to: date | None,
 ) -> None:
@@ -399,7 +398,6 @@ def _recompute_orders(
     # force-include list.
     st.session_state["_recompute_args"] = {
         "include_unpaid": include_unpaid,
-        "include_unfulfilled": include_unfulfilled,
         "date_from": date_from,
         "date_to": date_to,
     }
@@ -412,7 +410,6 @@ def _recompute_orders(
         df,
         settings,
         include_unpaid=include_unpaid,
-        include_unfulfilled=include_unfulfilled,
         date_from=date_from,
         date_to=date_to,
         overrides=st.session_state["overrides"],
@@ -492,25 +489,21 @@ def page_upload() -> None:
 
     today = date.today()
     default_from, default_to = previous_month_range(today)
-    col1, col2, col3, col4 = st.columns([1.2, 1.2, 1, 1])
+    col1, col2, col3 = st.columns([1.2, 1.2, 1])
     with col1:
         date_from = st.date_input("From", value=default_from)
     with col2:
         date_to = st.date_input("To", value=default_to)
     with col3:
-        include_unpaid = st.checkbox("Include unpaid (forecast)", value=False)
-    with col4:
-        include_unfulfilled = st.checkbox(
-            "Include unfulfilled",
-            value=False,
-            help="By default a sale counts only when it is both Paid AND "
-                 "Fulfilled. Tick to also include unfulfilled / partially "
-                 "fulfilled / restocked orders.",
+        include_unpaid = st.checkbox(
+            "Include unpaid (forecast)", value=False,
+            help="By default an order counts once it is fully Paid, regardless "
+                 "of fulfillment. Tick to also include not-fully-paid orders "
+                 "(Unpaid / Partially Paid / COD) as a forecast.",
         )
 
     _recompute_orders(
         include_unpaid=include_unpaid,
-        include_unfulfilled=include_unfulfilled,
         date_from=date_from,
         date_to=date_to,
     )
@@ -810,8 +803,7 @@ def _render_force_include_editor() -> None:
             st.session_state["force_include"] = new
             _save_force_include(new)
             args = st.session_state.get("_recompute_args") or {
-                "include_unpaid": False, "include_unfulfilled": False,
-                "date_from": None, "date_to": None,
+                "include_unpaid": False, "date_from": None, "date_to": None,
             }
             _recompute_orders(**args)
             st.success(f"Saved {len(new)} force-included order(s).")

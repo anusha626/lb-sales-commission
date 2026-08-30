@@ -187,10 +187,10 @@ def test_discount_captured_and_split_across_sas():
     assert contribs["LILY"].discount_share == 100.0    # 250 * 0.4
 
 
-def test_sale_counts_only_when_paid_and_fulfilled():
-    """A sale counts only when it is BOTH Paid and Fulfilled. A Paid but
-    Unfulfilled / Partially Fulfilled / Restocked order is excluded by default,
-    and comes back when include_unfulfilled=True."""
+def test_fully_paid_counts_regardless_of_fulfillment():
+    """As long as an order is fully Paid it counts — fulfillment status
+    (Fulfilled / Unfulfilled / Partially Fulfilled / Restocked) is not a gate.
+    Not-fully-paid orders (Partially Paid) are still held out."""
     settings = load_all()
     df = _df(
         [
@@ -200,17 +200,15 @@ def test_sale_counts_only_when_paid_and_fulfilled():
                     "Fulfillment Status": "Unfulfilled"}),
             _row(**{"Order Number": "#PP", "Financial Status": "Paid",
                     "Fulfillment Status": "Partially Fulfilled"}),
+            _row(**{"Order Number": "#HALF", "Financial Status": "Partially Paid",
+                    "Fulfillment Status": "Fulfilled"}),
         ]
     )
     by = {o.order_number: o for o in build_order_results(df, settings)}
     assert not by["#PF"].excluded
-    assert by["#PU"].excluded and "Fulfillment status" in by["#PU"].excluded_reason
-    assert by["#PP"].excluded
-
-    # Opt back in
-    by2 = {o.order_number: o
-           for o in build_order_results(df, settings, include_unfulfilled=True)}
-    assert not by2["#PU"].excluded and not by2["#PP"].excluded
+    assert not by["#PU"].excluded             # unfulfilled but paid -> counts
+    assert not by["#PP"].excluded             # partially fulfilled but paid -> counts
+    assert by["#HALF"].excluded               # not fully paid -> held out
 
 
 def test_blank_fulfillment_status_is_not_excluded():
@@ -237,15 +235,13 @@ def test_restocked_order_counts_as_sale():
 
 
 def test_force_include_overrides_status_exclusion():
-    """A paid-but-Unfulfilled order the user force-includes is counted (and
-    costed) despite the fulfillment filter; others stay excluded."""
+    """A not-fully-paid order the user force-includes is counted (and costed)
+    despite the paid filter; others stay excluded."""
     settings = load_all()
     df = _df(
         [
-            _row(**{"Order Number": "#KEEP", "Financial Status": "Paid",
-                    "Fulfillment Status": "Unfulfilled"}),
-            _row(**{"Order Number": "#DROP", "Financial Status": "Paid",
-                    "Fulfillment Status": "Unfulfilled"}),
+            _row(**{"Order Number": "#KEEP", "Financial Status": "Partially Paid"}),
+            _row(**{"Order Number": "#DROP", "Financial Status": "Partially Paid"}),
         ]
     )
     by = {o.order_number: o for o in build_order_results(df, settings, force_include={"#KEEP"})}
