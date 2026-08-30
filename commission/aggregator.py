@@ -235,6 +235,7 @@ def build_order_results(
     overrides: dict[str, ParsedNote] | None = None,
     clearance_skus: set[str] | None = None,
     clearance_from: date | None = None,
+    force_include: set[str] | None = None,
 ) -> list[OrderResult]:
     """Run the full pipeline: aggregate → filter → parse → cost.
 
@@ -299,6 +300,11 @@ def build_order_results(
             order_status, financial_status, fulfillment_status,
             include_unpaid, include_unfulfilled
         )
+        # Force-include: the user explicitly wants this order counted even though
+        # a status filter would drop it (e.g. a paid-but-Unfulfilled sale). It
+        # then flows through the normal path so charges/net are computed.
+        if excluded_reason and force_include and order_number in force_include:
+            excluded_reason = None
 
         if order_number in overrides:
             parsed = overrides[order_number]

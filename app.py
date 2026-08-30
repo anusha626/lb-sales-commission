@@ -68,6 +68,21 @@ def _save_reclassifications(rc: dict) -> None:
     RECLASS_PATH.write_text(json.dumps(rc, indent=2))
 
 
+FORCE_INCLUDE_PATH = PROJECT_ROOT / "data" / "force_include.json"
+
+
+def _load_force_include() -> set:
+    try:
+        return set(json.loads(FORCE_INCLUDE_PATH.read_text()))
+    except Exception:
+        return set()
+
+
+def _save_force_include(orders: set) -> None:
+    FORCE_INCLUDE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    FORCE_INCLUDE_PATH.write_text(json.dumps(sorted(orders), indent=2))
+
+
 def _build_version() -> str:
     """Short git commit + date of the running build, so a reboot is visible.
     Computed once per app start (module load); falls back to 'unknown'."""
@@ -361,6 +376,8 @@ def _ensure_state() -> None:
     # order_number -> {'month': 'YYYY-MM', 'flat_paid': float}: carry-forward
     # reclassification (clearance -> normal + move payout month).
     st.session_state.setdefault("reclassifications", _load_reclassifications())
+    # Order numbers to force-count even if a status filter would drop them.
+    st.session_state.setdefault("force_include", _load_force_include())
     # Metadata about the currently-loaded CSV (name, rows, load time) so the
     # user can confirm which file the figures come from.
     st.session_state.setdefault("data_meta", None)
@@ -378,6 +395,14 @@ def _recompute_orders(
     date_from: date | None,
     date_to: date | None,
 ) -> None:
+    # Remember the last inputs so the report page can rebuild after editing the
+    # force-include list.
+    st.session_state["_recompute_args"] = {
+        "include_unpaid": include_unpaid,
+        "include_unfulfilled": include_unfulfilled,
+        "date_from": date_from,
+        "date_to": date_to,
+    }
     df = st.session_state.get("df")
     if df is None:
         st.session_state["orders"] = None
@@ -393,6 +418,7 @@ def _recompute_orders(
         overrides=st.session_state["overrides"],
         clearance_skus=st.session_state.get("clearance_skus") or set(),
         clearance_from=st.session_state.get("clearance_from"),
+        force_include=st.session_state.get("force_include") or set(),
     )
     st.session_state["orders"] = orders
 
@@ -750,6 +776,48 @@ def _apply_reclassifications(
     return out
 
 
+def _render_force_include_editor() -> None:
+    """Add specific order numbers to count even when a status filter (e.g.
+    Unfulfilled) is holding them out. They flow into the report normally."""
+    fi: set = st.session_state["force_include"]
+    with st.expander(
+        f"➕ Force-include orders (count despite Paid/Fulfilled filter)  ·  {len(fi)} set",
+        expanded=False,
+    ):
+        st.caption(
+            "List order numbers that should be counted even though a status "
+            "filter is dropping them (e.g. a paid-but-Unfulfilled sale in the "
+            "Excluded tab). They are re-costed and included normally."
+        )
+        rows = [{"Order #": o} for o in sorted(fi)] or [{"Order #": ""}]
+        edited = st.data_editor(
+            pd.DataFrame(rows),
+            num_rows="dynamic",
+            hide_index=True,
+            use_container_width=True,
+            key="force_include_editor",
+            column_config={"Order #": st.column_config.TextColumn(help="e.g. #10459")},
+        )
+        if st.button("Save force-include"):
+            new: set = set()
+            for _, r in edited.iterrows():
+                on = str(r["Order #"] or "").strip()
+                if not on:
+                    continue
+                if not on.startswith("#"):
+                    on = "#" + on
+                new.add(on)
+            st.session_state["force_include"] = new
+            _save_force_include(new)
+            args = st.session_state.get("_recompute_args") or {
+                "include_unpaid": False, "include_unfulfilled": False,
+                "date_from": None, "date_to": None,
+            }
+            _recompute_orders(**args)
+            st.success(f"Saved {len(new)} force-included order(s).")
+            st.rerun()
+
+
 def _render_reclass_editor() -> None:
     """Editor to carry orders forward: reclassify clearance → normal sale, move
     the payout month, and record any flat commission already paid last month."""
@@ -893,6 +961,7 @@ def page_report() -> None:
 
     # ---- Carry-forward / reclassify orders ---------------------------------
     _render_reclass_editor()
+    _render_force_include_editor()
     orders = _apply_reclassifications(orders, st.session_state["reclassifications"])
 
     # ---- Attribute orders to a payout month by *settlement* date -----------

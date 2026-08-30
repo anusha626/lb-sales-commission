@@ -234,3 +234,21 @@ def test_restocked_order_counts_as_sale():
     )
     o = build_order_results(df, settings)[0]
     assert not o.excluded
+
+
+def test_force_include_overrides_status_exclusion():
+    """A paid-but-Unfulfilled order the user force-includes is counted (and
+    costed) despite the fulfillment filter; others stay excluded."""
+    settings = load_all()
+    df = _df(
+        [
+            _row(**{"Order Number": "#KEEP", "Financial Status": "Paid",
+                    "Fulfillment Status": "Unfulfilled"}),
+            _row(**{"Order Number": "#DROP", "Financial Status": "Paid",
+                    "Fulfillment Status": "Unfulfilled"}),
+        ]
+    )
+    by = {o.order_number: o for o in build_order_results(df, settings, force_include={"#KEEP"})}
+    assert not by["#KEEP"].excluded
+    assert by["#KEEP"].net_total > 0          # re-costed, not zeroed
+    assert by["#DROP"].excluded               # others unaffected
