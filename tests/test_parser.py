@@ -601,3 +601,15 @@ def test_tiktok_as_split_party_is_house():
     assert {(s.name, round(s.share, 2)) for s in p.sa_shares} == {
         ("CHRISTY", 0.3), (HOUSE_ACCOUNT, 0.7),
     }
+
+
+def test_positional_split_sa_plus_company_sales():
+    """'ANNABELL ... RM10790 COMPANY SALES RM490' → ANNABELL gets her RM10,790
+    and the house RM490 — not COMPANY SALES 100%."""
+    p = parse_seller_note(
+        "ANNABELL\nWALK IN PG\nVISA CREDIT 2104 RM10790\nCOMPANY SALES RM490",
+        order_total=11280.0, sa_list=["ANNABELL", "LILY"],
+    )
+    shares = {s.name: round(s.share, 4) for s in p.sa_shares}
+    assert shares == {"ANNABELL": round(10790 / 11280, 4),
+                      HOUSE_ACCOUNT: round(490 / 11280, 4)}

@@ -348,10 +348,20 @@ def _detect_positional_amount_shares(
     distinct SAs each end up with an amount.
     """
     upper = note.upper()
-    # SA-name occurrences (single-word tokens matched to the pool), left to right.
+    # SA-name (and house) occurrences as single-word tokens, left to right.
+    # "COMPANY" (or "TIKTOK") anchors the house account, so an order split
+    # between an SA and COMPANY SALES ("ANNABELL ... RM10790 COMPANY SALES
+    # RM490") attributes each amount to the right party.
     name_hits: list[tuple[int, str]] = []
     for m in re.finditer(r"[A-Z]{2,}", upper):
-        canonical = _best_sa_match(m.group(0), sa_pool)
+        tok = m.group(0)
+        # "COMPANY"/"HOUSE" anchor the house account here. NOT "TIKTOK" — in an
+        # amount split it is usually a channel marker ("LILY TIKTOK/WHATSAP ...")
+        # rather than a party. (Percentage splits handle "TIKTOK 70%" separately.)
+        if fuzz.ratio(tok, "COMPANY") >= 82 or tok == "HOUSE":
+            canonical = HOUSE_ACCOUNT
+        else:
+            canonical = _best_sa_match(tok, sa_pool)
         if canonical is not None:
             name_hits.append((m.start(), canonical))
     if len({n for _, n in name_hits}) < 2:
