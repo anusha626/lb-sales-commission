@@ -589,3 +589,15 @@ def test_non_tiktok_channel_still_flags_missing_method():
     p = parse_seller_note("LILY\nWALK IN\nSOMETHING RM500", order_total=500.0,
                           channel="admin_panel")
     assert any("No payment method" in f for f in p.review_flags)
+
+
+def test_tiktok_as_split_party_is_house():
+    """'TIKTOK 70% CHRISTY 30%' means CHRISTY 30% and the house (TikTok's
+    company share) 70% — not CHRISTY 100%."""
+    p = parse_seller_note(
+        "TIKTOK 70% CHRISTY 30%\nTIKTOK\nONLINE TRANSFER RM9100",
+        order_total=9100.0, sa_list=["CHRISTY", "LILY"],
+    )
+    assert {(s.name, round(s.share, 2)) for s in p.sa_shares} == {
+        ("CHRISTY", 0.3), (HOUSE_ACCOUNT, 0.7),
+    }

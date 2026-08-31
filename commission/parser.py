@@ -253,8 +253,13 @@ def _detect_split_shares(
         # not be read as a 50% share. (The '%' is optional, so guard by text.)
         if note[: m.start(2)].rstrip().upper().endswith("RM"):
             continue
+        # "TIKTOK 70% CHRISTY 30%": TIKTOK (and COMPANY/HOUSE) as a split party
+        # means the house account keeps that share — the SA gets the rest.
+        if token in {"TIKTOK", "COMPANY", "HOUSE"} or fuzz.ratio("COMPANY", token) >= 82:
+            candidates.append((HOUSE_ACCOUNT, pct, m.start()))
+            continue
         # Reject tokens that look like generic words (channel keywords etc.)
-        if token in {"WALK", "WALKIN", "WHATSAPP", "CHATDADDY", "TIKTOK", "ONLINE", "STORE"}:
+        if token in {"WALK", "WALKIN", "WHATSAPP", "CHATDADDY", "ONLINE", "STORE"}:
             continue
         canonical = _best_sa_match(token, sa_pool)
         if canonical is None:
