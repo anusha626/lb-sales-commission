@@ -533,11 +533,17 @@ def parse_seller_note(
                 seg, (kst - seg_start, ken - seg_start)
             )
             amount = sum(amounts) if amounts else None
+            # Foreign card: "VISA FOREIGN", "MASTER FOREIGN", "OVERSEAS" carry a
+            # higher merchant rate (e.g. Visa 2.5% vs 0.9% local). Flag the
+            # portion so the charge calculator picks the foreign rate row.
+            up = seg.upper()
+            is_foreign = "FOREIGN" in up or "OVERSEAS" in up
             payments.append(
                 PaymentPortion(
                     method=method,
                     amount=amount,
                     last4=last4,
+                    is_foreign=is_foreign,
                     raw_line=seg.strip(),
                 )
             )

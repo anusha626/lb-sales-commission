@@ -613,3 +613,14 @@ def test_positional_split_sa_plus_company_sales():
     shares = {s.name: round(s.share, 4) for s in p.sa_shares}
     assert shares == {"ANNABELL": round(10790 / 11280, 4),
                       HOUSE_ACCOUNT: round(490 / 11280, 4)}
+
+
+def test_foreign_card_flag_detected():
+    """'VISA FOREIGN' flags the portion as foreign so the charge calculator
+    picks the higher foreign rate (2.5%) instead of the local 0.9%."""
+    p = parse_seller_note("LILY WALK IN VISA FOREIGN RM35970", order_total=35970.0)
+    assert _methods(p) == [PaymentMethod.VISA_CREDIT]
+    assert p.payments[0].is_foreign is True
+    # a non-foreign card stays local
+    q = parse_seller_note("LILY\nVISA CREDIT 1234 RM5000", order_total=5000.0)
+    assert q.payments[0].is_foreign is False
