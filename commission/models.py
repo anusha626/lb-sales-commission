@@ -101,6 +101,28 @@ class ChargeLine(BaseModel):
     net: float
 
 
+class LineItem(BaseModel):
+    """One product line on an order — needed by the SA incentive for the
+    gross-profit test (cost comes from the product export, see costs.py) and
+    for stripping service revenue out of the qualifying sales figure."""
+
+    sku: str = ""
+    name: str = ""
+    price: float = 0.0       # unit selling price
+    qty: float = 1.0
+    discount: float = 0.0    # positive magnitude of the line discount
+    cost: float | None = None  # unit cost; None = SKU not in the cost store
+
+    @property
+    def gross(self) -> float:
+        """Line revenue after its own discount."""
+        return round(self.price * self.qty - self.discount, 2)
+
+    @property
+    def cost_total(self) -> float | None:
+        return None if self.cost is None else round(self.cost * self.qty, 2)
+
+
 class OrderResult(BaseModel):
     """Aggregated, parsed and costed result for one order."""
 
@@ -144,6 +166,14 @@ class OrderResult(BaseModel):
     # flat commission rate (%) instead of the tier rate; clearance is treated as
     # a normal sale and counted toward the monthly total.
     event_rate: float | None = None
+    # --- SA incentive support (see incentive.py) -------------------------
+    # Line items, with unit cost filled in from the SKU cost store where the
+    # SKU is known. Empty when the export carried no line-item rows.
+    line_items: list[LineItem] = Field(default_factory=list)
+    # Customer identity for returning-customer counting: normalised email,
+    # else phone, else name. "" when the export has none of the three.
+    customer_key: str = ""
+    customer_label: str = ""
 
     @property
     def needs_review(self) -> bool:

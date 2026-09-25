@@ -1,0 +1,122 @@
+{
+  "name": "SA Return Customer & Sales Growth Incentive",
+  "year_label": "Year 1",
+  "start_month": "2026-09",
+  "min_order_value": 1000.0,
+  "gp_threshold_pct": 30.0,
+  "gp_basis": "accumulated",
+  "sales_basis": "gross",
+  "returning_scope": "same_sa",
+  "returning_count": "distinct",
+  "service_keywords": [
+    "SPA",
+    "POLISH",
+    "SERVICE",
+    "CLEANING",
+    "REPAIR",
+    "RESTORATION",
+    "REGLAZ",
+    "RECOLOUR",
+    "RECOLOR",
+    "HARDWARE PLATING",
+    "AUTHENTICATION"
+  ],
+  "months": [
+    {
+      "m": 1,
+      "key": "2026-09",
+      "monthly_sales_target": 280000.0,
+      "accumulated_sales_target": 280000.0,
+      "returning_target": 10,
+      "base_incentive": 200.0
+    },
+    {
+      "m": 2,
+      "key": "2026-10",
+      "monthly_sales_target": 330000.0,
+      "accumulated_sales_target": 610000.0,
+      "returning_target": 25,
+      "base_incentive": 300.0
+    },
+    {
+      "m": 3,
+      "key": "2026-11",
+      "monthly_sales_target": 330000.0,
+      "accumulated_sales_target": 940000.0,
+      "returning_target": 40,
+      "base_incentive": 400.0
+    },
+    {
+      "m": 4,
+      "key": "2026-12",
+      "monthly_sales_target": 360000.0,
+      "accumulated_sales_target": 1300000.0,
+      "returning_target": 55,
+      "base_incentive": 500.0
+    },
+    {
+      "m": 5,
+      "key": "2027-01",
+      "monthly_sales_target": 360000.0,
+      "accumulated_sales_target": 1660000.0,
+      "returning_target": 70,
+      "base_incentive": 600.0
+    },
+    {
+      "m": 6,
+      "key": "2027-02",
+      "monthly_sales_target": 360000.0,
+      "accumulated_sales_target": 2020000.0,
+      "returning_target": 85,
+      "base_incentive": 700.0
+    },
+    {
+      "m": 7,
+      "key": "2027-03",
+      "monthly_sales_target": 400000.0,
+      "accumulated_sales_target": 2420000.0,
+      "returning_target": 105,
+      "base_incentive": 800.0
+    },
+    {
+      "m": 8,
+      "key": "2027-04",
+      "monthly_sales_target": 400000.0,
+      "accumulated_sales_target": 2820000.0,
+      "returning_target": 125,
+      "base_incentive": 900.0
+    },
+    {
+      "m": 9,
+      "key": "2027-05",
+      "monthly_sales_target": 400000.0,
+      "accumulated_sales_target": 3220000.0,
+      "returning_target": 145,
+      "base_incentive": 1000.0
+    },
+    {
+      "m": 10,
+      "key": "2027-06",
+      "monthly_sales_target": 450000.0,
+      "accumulated_sales_target": 3670000.0,
+      "returning_target": 170,
+      "base_incentive": 1100.0
+    },
+    {
+      "m": 11,
+      "key": "2027-07",
+      "monthly_sales_target": 450000.0,
+      "accumulated_sales_target": 4120000.0,
+      "returning_target": 195,
+      "base_incentive": 1400.0
+    },
+    {
+      "m": 12,
+      "key": "2027-08",
+      "monthly_sales_target": 450000.0,
+      "accumulated_sales_target": 4570000.0,
+      "returning_target": 220,
+      "base_incentive": 1700.0
+    }
+  ]
+}

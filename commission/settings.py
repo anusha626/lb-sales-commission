@@ -18,6 +18,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from .incentive import IncentiveScheme, SCHEME_FILE, load_scheme, save_scheme  # noqa: F401
 from .models import (
     CommissionTier,
     PaymentMethod,
@@ -235,6 +236,9 @@ class AppSettings(BaseModel):
     sa_list: SAListConfig
     tiers: TiersConfig
     rates: RatesConfig
+    # SA Return Customer & Sales Growth Incentive — a separate scheme from the
+    # tier commission above (see incentive.py).
+    incentive: IncentiveScheme
 
 
 def load_all() -> AppSettings:
@@ -242,4 +246,5 @@ def load_all() -> AppSettings:
         sa_list=load_sa_list(),
         tiers=load_tiers(),
         rates=load_rates(),
+        incentive=load_scheme(),
     )

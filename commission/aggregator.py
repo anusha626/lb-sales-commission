@@ -21,7 +21,16 @@ from typing import IO
 import pandas as pd
 
 from .charges import calculate_charges
-from .models import OrderResult, ParsedNote, PaymentMethod, PaymentPortion, SAShare
+from .costs import CostStore
+from .incentive import customer_key
+from .models import (
+    LineItem,
+    OrderResult,
+    ParsedNote,
+    PaymentMethod,
+    PaymentPortion,
+    SAShare,
+)
 from .parser import HOUSE_ACCOUNT, parse_seller_note
 from .settings import AppSettings, TiersConfig
 
@@ -111,6 +120,44 @@ def _clearance_sku_amount(group: pd.DataFrame, clearance_skus: set[str] | None) 
     return round(total, 2)
 
 
+def _line_items(group: pd.DataFrame, costs: CostStore | None) -> list[LineItem]:
+    """Every product row of an order, with unit cost filled in from the SKU
+    cost store. Rows with no item name and no SKU are export padding (extra
+    transaction rows) and are skipped."""
+    if "Item Name" not in group.columns and "Item SKU" not in group.columns:
+        return []
+    out: list[LineItem] = []
+    for _, r in group.iterrows():
+        sku = str(r.get("Item SKU", "") or "").strip()
+        name = str(r.get("Item Name", "") or "").strip()
+        if not sku and not name:
+            continue
+        price = _parse_total(str(r.get("Item Price", "") or "0"))
+        qty = _parse_total(str(r.get("Quantity", "") or "1")) or 1.0
+        disc = abs(_parse_total(str(r.get("Item Discount", "") or "0")))
+        out.append(
+            LineItem(
+                sku=sku,
+                name=name,
+                price=price,
+                qty=qty,
+                discount=disc,
+                cost=costs.cost_for(sku) if (costs and sku) else None,
+            )
+        )
+    return out
+
+
+def _customer(head: pd.Series) -> tuple[str, str]:
+    """Identity for returning-customer counting, from the billing columns."""
+    return customer_key(
+        str(head.get("Billing Email", "") or ""),
+        str(head.get("Billing Phone", "") or ""),
+        str(head.get("Billing First Name", "") or ""),
+        str(head.get("Billing Last Name", "") or ""),
+    )
+
+
 def _discount_amount(group: pd.DataFrame, head: pd.Series) -> float:
     """Total discount given on an order: the order-level discount (header row)
     plus the sum of per-line-item discounts. EasyStore stores these as negative
@@ -123,7 +170,9 @@ def _discount_amount(group: pd.DataFrame, head: pd.Series) -> float:
 
 
 def _aggregate_rows(
-    df: pd.DataFrame, clearance_skus: set[str] | None = None
+    df: pd.DataFrame,
+    clearance_skus: set[str] | None = None,
+    costs: CostStore | None = None,
 ) -> list[dict]:
     """Collapse a multi-row order export to one record per Order Number.
 
@@ -147,6 +196,8 @@ def _aggregate_rows(
         rec["__settlement_date__"] = _settlement_date_for_group(group)
         rec["__clearance_sku_amount__"] = _clearance_sku_amount(group, clearance_skus)
         rec["__discount_amount__"] = _discount_amount(group, head)
+        rec["__line_items__"] = _line_items(group, costs)
+        rec["__customer__"] = _customer(head)
         out.append(rec)
     return out
 
@@ -227,6 +278,7 @@ def build_order_results(
     clearance_skus: set[str] | None = None,
     clearance_from: date | None = None,
     force_include: set[str] | None = None,
+    costs: CostStore | None = None,
 ) -> list[OrderResult]:
     """Run the full pipeline: aggregate → filter → parse → cost.
 
@@ -235,7 +287,7 @@ def build_order_results(
     parser output is replaced wholesale.
     """
     overrides = overrides or {}
-    aggregated = _aggregate_rows(df, clearance_skus)
+    aggregated = _aggregate_rows(df, clearance_skus, costs)
     sa_pool = settings.sa_list.active_names
 
     out: list[OrderResult] = []
@@ -293,6 +345,8 @@ def build_order_results(
         order_status = row.get("Order Status", "") or ""
         financial_status = row.get("Financial Status", "") or ""
         tags = _parse_tags(row.get(TAG_COL, "") or "")
+        line_items = row.get("__line_items__") or []
+        cust_key, cust_label = row.get("__customer__") or ("", "")
 
         excluded_reason = _excluded_reason(
             order_status, financial_status, include_unpaid
@@ -332,6 +386,9 @@ def build_order_results(
                     gross_total=gross,
                     discount_total=discount_total,
                     event_rate=event_rate,
+                    line_items=line_items,
+                    customer_key=cust_key,
+                    customer_label=cust_label,
                     parsed=parsed,
                     tags=tags,
                     charges=[],
@@ -366,6 +423,9 @@ def build_order_results(
                 gross_total=gross,
                 discount_total=discount_total,
                 event_rate=event_rate,
+                line_items=line_items,
+                customer_key=cust_key,
+                customer_label=cust_label,
                 parsed=parsed,
                 tags=tags,
                 charges=charge_lines,

@@ -904,6 +904,7 @@ def build_workbook(
     payout_label: str | None = None,
     refunded_orders: list[OrderResult] | None = None,
     all_orders: list[OrderResult] | None = None,
+    incentive_report=None,
 ) -> bytes:
     """Render the full report and return raw .xlsx bytes.
 
@@ -937,6 +938,9 @@ def build_workbook(
     if report.house:
         _build_house_sheet(wb.create_sheet(), report.house, by_number)
 
+    if incentive_report is not None and incentive_report.sa_results:
+        _build_incentive_sheet(wb.create_sheet(), incentive_report)
+
     _build_review_sheet(wb.create_sheet(), audit)
     _build_excluded_sheet(wb.create_sheet(), audit)
     _build_settings_sheet(wb.create_sheet(), settings)
@@ -944,3 +948,100 @@ def build_workbook(
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# SA Incentive sheet (separate scheme — see commission/incentive.py)
+# ---------------------------------------------------------------------------
+
+_INC_HEADERS = [
+    "SA", "Month sales", "Accum. sales", "Sales target", "GP %", "GP gate",
+    "Returning", "Return target", "Part A", "Part B", "Base", "Multiplier",
+    "Incentive",
+]
+_INC_MONEY_COLS = {2, 3, 4, 11, 13}
+_INC_PCT_COLS = {5}
+
+
+def _build_incentive_sheet(ws, report) -> None:
+    """One row per SA: both parts, the targets they are tested against, and
+    the payout. Deliberately a sheet of its own — this scheme is paid on top
+    of the tier commission and is never folded into it."""
+    ws.title = "SA Incentive"
+
+    ws.cell(row=1, column=1, value=report.scheme_name or "SA Incentive").font = Font(
+        bold=True, size=14, color=_NAVY
+    )
+    ws.cell(
+        row=2, column=1,
+        value=(
+            f"Payout month M{report.month_index} ({report.month_key}). "
+            "Part A and Part B are measured on totals accumulated since the "
+            "scheme start month. One part = 1x base, both = 2x, neither = nil."
+        ),
+    ).font = Font(italic=True, color=_MUTED)
+
+    hdr = 4
+    for c, h in enumerate(_INC_HEADERS, start=1):
+        cell = ws.cell(row=hdr, column=c, value=h)
+        cell.fill = _HEADER_FILL
+        cell.font = _HEADER_FONT
+        cell.border = _BORDER
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    r = hdr
+    for i, res in enumerate(report.sa_results):
+        r = hdr + 1 + i
+        values = [
+            res.sa_name,
+            res.month_sales,
+            res.accum_sales,
+            res.sales_target,
+            res.accum_gp_pct,
+            "Pass" if res.gp_gate_passed else "Fail",
+            res.accum_returning,
+            res.returning_target,
+            "Yes" if res.part_a_hit else "No",
+            "Yes" if res.part_b_hit else "No",
+            res.base_incentive,
+            res.multiplier_label,
+            res.payout,
+        ]
+        for c, v in enumerate(values, start=1):
+            cell = ws.cell(row=r, column=c, value=v)
+            cell.border = _BORDER
+            if i % 2:
+                cell.fill = PatternFill("solid", fgColor=_ZEBRA)
+            if c in _INC_MONEY_COLS:
+                cell.number_format = _MONEY_FMT
+            elif c in _INC_PCT_COLS:
+                cell.number_format = _PCT_FMT
+            if c >= 2:
+                cell.alignment = Alignment(horizontal="right")
+        if res.payout:
+            ws.cell(row=r, column=13).font = Font(bold=True, color=_TEAL)
+
+    if report.sa_results:
+        total = r + 1
+        ws.cell(row=total, column=1, value="TOTAL").font = Font(bold=True)
+        tc = ws.cell(row=total, column=13, value=report.total_payout)
+        tc.font = Font(bold=True)
+        tc.number_format = _MONEY_FMT
+        for c in range(1, len(_INC_HEADERS) + 1):
+            ws.cell(row=total, column=c).fill = PatternFill("solid", fgColor=_SUBTOTAL_FILL)
+            ws.cell(row=total, column=c).border = _BORDER
+        r = total
+
+    notes = [res for res in report.sa_results if res.excluded_note]
+    if notes:
+        nr = r + 2
+        ws.cell(row=nr, column=1, value="Notes").font = Font(bold=True, color=_GOLD)
+        for j, res in enumerate(notes, start=1):
+            ws.cell(row=nr + j, column=1, value=f"{res.sa_name}: {res.excluded_note}").font = (
+                Font(italic=True, color=_MUTED)
+            )
+
+    widths = [14, 15, 15, 15, 9, 9, 11, 13, 9, 9, 11, 11, 14]
+    for c, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(c)].width = w
+    ws.freeze_panes = ws.cell(row=hdr + 1, column=1)

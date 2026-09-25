@@ -43,3 +43,8 @@ download_attachments.py
 .idea/
 *.sublime-*
 .claude/
+
+# SA incentive state is TRACKED, like the other data/*.json files — the
+# deployed app pushes it back to the repo so accumulated figures survive a
+# restart. Customer identities in incentive_history.json are one-way hashes,
+# never emails or phone numbers (see commission/incentive.py:hash_identity).

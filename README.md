@@ -31,13 +31,15 @@ pytest tests/ -v
 ## Folder layout
 
 ```
-app.py                     Streamlit UI (3 pages)
+app.py                     Streamlit UI (4 pages)
 commission/
     __init__.py
     models.py              Pydantic models (ParsedNote, OrderResult, …)
     parser.py              Seller-note parser (the heart of the system)
     charges.py             Bank-charge calculator
     commission_engine.py   Tier lookup + per-SA aggregation
+    incentive.py           SA Return Customer & Sales Growth Incentive
+    costs.py               Accumulating SKU → cost-price store
     aggregator.py          CSV → list[OrderResult] pipeline
     excel_export.py        Multi-sheet workbook builder
     settings.py            Load/save data/*.json
@@ -45,8 +47,12 @@ data/
     sa_list.json           Active SAs
     tiers.json             Commission brackets + channel flat rules
     rates.json             Versioned merchant rate card
+    incentive_scheme.json  SA incentive targets (Part A / Part B, M1–M12)
+    incentive_history.json Saved monthly incentive figures (accumulates)
+    sku_costs.json         SKU → cost price, for the 30% gross-profit gate
 tests/
     test_parser.py         Real-note fixtures (21 cases, all from sample_data.csv)
+    test_incentive.py      SA incentive: qualification, Part A/B, accumulation
 sample_data.csv            Real EasyStore export for development
 ```
 
@@ -191,3 +197,61 @@ multi-sheet `.xlsx`:
 - `Excluded` — every excluded order with the reason.
 - `Settings snapshot` — the SA list, tiers, channel flat rules, and active
   rate version at the moment the report was generated.
+
+
+## SA Return Customer & Sales Growth Incentive
+
+A **separate** scheme from the tier commission above, paid on top of it and on
+top of the Year-End Sales Bonus. Runs M1 = Sep 2026 → M12 = Aug 2027. Lives in
+`commission/incentive.py` and gets its own page in the app; it never changes a
+`SACommission` figure.
+
+Each month, per SA, two parts are assessed **independently** on totals
+**accumulated since Sep 2026** — not on the month alone:
+
+| Part | Test | Pays |
+|------|------|------|
+| A | accumulated returning customers ≥ target (10 → 220) | 1× base |
+| B | accumulated qualifying sales ≥ target (280K → 4.57M) **and** gross profit ≥ 30% | 1× base |
+
+One part = 1× base, both = 2× base, neither = nothing (no carry-forward as a
+debt). Base runs RM200 (M1) → RM1,700 (M12).
+
+### What qualifies
+
+- the order must be kept by the main pipeline (fully paid, not cancelled)
+- order total ≥ RM1,000 — tested on the whole order, not the SA's share
+- service revenue (bag spa, polish, …) is stripped out; a service-only order
+  counts no sales and makes nobody a returning customer
+- **event / sale stock counts** — that exclusion was removed from the scheme on
+  25 Sep 2026
+- sales and customers are credited by the SA's share % on the order
+
+### The two data sources it needs
+
+**Cost prices.** The orders export has no cost column; the *products* export
+has `SKU` + `Cost Price`. Upload one on the SA Incentive page and it is merged
+into `data/sku_costs.json`, which **accumulates** — an item sold and delisted
+keeps its cost, so coverage grows month by month. The page shows what
+percentage of qualifying revenue has a known cost; below 90% the GP figure is
+flagged as an estimate.
+
+**Customer history.** A buyer is only *returning* if the SA sold to them
+before, so purchases from before Sep 2026 have to be seeded once (a button on
+the same page reads them out of any loaded export that reaches back far
+enough). Without the seed nobody can be returning in M1.
+
+### Accumulation
+
+Part A and Part B need the earlier months, so each finalised month is saved to
+`data/incentive_history.json` from the SA Incentive page. The month being
+reported is always recomputed from the current CSV — only prior months come
+from history — so re-running a month reflects the latest data and settings.
+
+### Configurable in Settings → SA incentive scheme
+
+Start month, minimum order value, GP threshold and whether GP is measured on
+the accumulated total or the month alone; whether sales count gross or net;
+whether "returning" means returning to *this SA* or to LB generally; whether a
+customer returning in several months counts once or every time; the service
+keyword list; and the full M1–M12 target table.

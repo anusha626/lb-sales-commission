@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 from datetime import date, datetime, timedelta
 
 import pandas as pd
@@ -23,7 +24,20 @@ from commission.commission_engine import (
     apply_overachievement_bonuses,
     compute_commissions,
 )
+from commission.costs import COSTS_FILE, CostStore
 from commission.excel_export import build_workbook
+from commission.incentive import (
+    HISTORY_FILE,
+    IncentiveHistory,
+    IncentiveMonth,
+    IncentiveScheme,
+    MonthFigures,
+    SCHEME_FILE,
+    compute_incentives,
+    load_scheme,
+    save_scheme,
+    seed_prior_customers,
+)
 from commission.github_sync import GitHubConfig, push_local_path
 from commission.models import (
     OrderResult,
@@ -382,6 +396,11 @@ def _ensure_state() -> None:
     # user can confirm which file the figures come from.
     st.session_state.setdefault("data_meta", None)
     st.session_state.setdefault("data_sig", None)
+    # SKU -> cost price, accumulated across every product export ever
+    # uploaded. Feeds the 30% gross-profit gate on the SA incentive.
+    st.session_state.setdefault("cost_store", CostStore.load())
+    # Saved per-month incentive figures (Part A / Part B accumulate on them).
+    st.session_state.setdefault("incentive_history", IncentiveHistory.load())
 
 
 def _reload_settings() -> None:
@@ -416,6 +435,7 @@ def _recompute_orders(
         clearance_skus=st.session_state.get("clearance_skus") or set(),
         clearance_from=st.session_state.get("clearance_from"),
         force_include=st.session_state.get("force_include") or set(),
+        costs=st.session_state.get("cost_store"),
     )
     st.session_state["orders"] = orders
 
@@ -1031,13 +1051,44 @@ def page_report() -> None:
     refunded_orders = [
         o for o in orders if (o.financial_status or "").strip().lower() == "refunded"
     ]
+    # The SA incentive is a separate scheme, but it rides along in the same
+    # workbook as its own sheet so one download covers the whole payout.
+    inc_report = None
+    if sel_month and settings.incentive.month_for(sel_month):
+        inc_report = compute_incentives(
+            month_orders,
+            settings.incentive,
+            st.session_state["incentive_history"],
+            sel_month,
+            sa_names=settings.sa_list.active_names,
+            cost_store_size=len(st.session_state["cost_store"]),
+        )
     xlsx = build_workbook(
         month_orders, report, settings,
         payout_month=sel_month,
         payout_label=_month_label(sel_month) if sel_month else None,
         refunded_orders=refunded_orders,
         all_orders=orders,  # full set → Review/Excluded tabs stay complete
+        incentive_report=inc_report,
     )
+    if inc_report is not None and inc_report.total_payout:
+        st.success(
+            f"➕ **SA Incentive (separate scheme): "
+            f"{fmt_money(inc_report.total_payout)}** paid on top of the "
+            f"commission above — "
+            + ", ".join(
+                f"{r.sa_name} {fmt_money(r.payout)} ({r.multiplier_label})"
+                for r in inc_report.sa_results
+                if r.payout
+            )
+            + ". See the **SA Incentive** page for the breakdown."
+        )
+    elif inc_report is not None:
+        st.info(
+            "➕ **SA Incentive (separate scheme): nothing payable this month.** "
+            "See the **SA Incentive** page for how close each SA is."
+        )
+
     month_tag = sel_month or datetime.now().strftime("%Y%m")
     xlsx_name = f"commission_report_{month_tag}.xlsx"
     st.download_button(
@@ -1175,7 +1226,332 @@ def page_report() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Page 3: Settings
+# Page 3: SA Incentive (separate scheme — see commission/incentive.py)
+# ---------------------------------------------------------------------------
+
+def _incentive_month_orders() -> tuple[str | None, list[OrderResult]]:
+    """Payout month picker, grouped by settlement date exactly like the
+    Commission Report page so both pages report the same set of orders."""
+    orders = st.session_state.get("orders") or []
+    orders = _apply_reclassifications(orders, st.session_state["reclassifications"])
+    settle_overrides: dict[str, date] = st.session_state["settlement_overrides"]
+    by_month: dict[str, list[OrderResult]] = {}
+    for o in orders:
+        if o.excluded:
+            continue
+        sd = _effective_settlement_date(o, settle_overrides)
+        if sd is not None:
+            by_month.setdefault(_month_key(sd), []).append(o)
+    if not by_month:
+        return None, []
+    keys = sorted(by_month, reverse=True)
+    sel = st.selectbox(
+        "Payout month", options=keys, format_func=_month_label, key="inc_month"
+    )
+    return sel, by_month[sel]
+
+
+def _render_cost_upload() -> None:
+    """Product-export upload that feeds the SKU cost store."""
+    store: CostStore = st.session_state["cost_store"]
+    st.markdown("**Cost prices** — needed for the 30% gross-profit gate on Part B")
+    st.caption(
+        f"The store currently holds **{len(store):,} SKUs**. It accumulates: "
+        "each product export you upload is merged and kept, so an item sold "
+        "and delisted keeps its cost. Upload a fresh EasyStore **product** "
+        "export (Products → Export) whenever coverage looks low."
+    )
+    up = st.file_uploader(
+        "EasyStore product export (needs SKU + Cost Price columns)",
+        type=["csv"],
+        key="cost_csv",
+    )
+    if up is not None and st.button("Merge into cost store", key="btn_merge_costs"):
+        try:
+            summary = store.merge_product_csv(up.getvalue())
+        except ValueError as exc:
+            st.error(str(exc))
+            return
+        store.save()
+        _save_and_sync(COSTS_FILE, f"cost store: +{summary['added']} SKUs")
+        st.success(
+            f"Merged {summary['rows']:,} rows — {summary['added']:,} new SKUs, "
+            f"{summary['updated']:,} updated, {summary['skipped']:,} skipped. "
+            f"Store now holds {summary['total_skus']:,} SKUs. "
+            "Re-upload the order CSV to apply the new costs."
+        )
+        st.rerun()
+
+
+def _render_prior_seed() -> None:
+    """Seed the pre-Sep-2026 purchase history used by Part A."""
+    history: IncentiveHistory = st.session_state["incentive_history"]
+    scheme: IncentiveScheme = st.session_state["settings"].incentive
+    known = sum(len(v) for v in history.prior_customers.values())
+    st.markdown("**Customer history before the scheme started**")
+    st.caption(
+        "A buyer only counts as *returning* if the SA had sold to them before. "
+        f"Purchases before {_month_label(scheme.start_month)} have to be seeded "
+        "from older exports, or nobody can be returning in M1. "
+        f"Currently seeded: **{known:,} customer records** across "
+        f"{len(history.prior_customers)} SA(s)."
+    )
+    orders = st.session_state.get("orders") or []
+    pre = [
+        o for o in orders
+        if not o.excluded and o.order_date.strftime("%Y-%m") < scheme.start_month
+    ]
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        disabled = not pre
+        if st.button(
+            f"Seed from loaded CSV ({len(pre)} pre-scheme orders)",
+            key="btn_seed_prior",
+            disabled=disabled,
+        ):
+            result = seed_prior_customers(pre, scheme, history)
+            history.save()
+            _save_and_sync(HISTORY_FILE, "incentive: seeded prior customers")
+            st.success(
+                "Seeded: "
+                + ", ".join(f"{sa} {n}" for sa, n in sorted(result.items()))
+            )
+            st.rerun()
+    with c2:
+        if not pre:
+            st.caption(
+                "The loaded CSV has no orders dated before the scheme start — "
+                "upload an export reaching further back to seed more history."
+            )
+
+
+def _render_incentive_history_editor(month_key: str, figures: dict) -> None:
+    """Save this month into history, and show / clear what is stored."""
+    history: IncentiveHistory = st.session_state["incentive_history"]
+    saved = history.months.get(month_key, {})
+    st.markdown("**Month history**")
+    st.caption(
+        "Part A and Part B are measured on totals accumulated since "
+        "the scheme start, so each finalised month has to be saved. Saving "
+        "overwrites this month's stored figures with the ones shown above."
+    )
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        label = "Update saved figures" if saved else "Save this month to history"
+        if st.button(f"💾 {label} — {_month_label(month_key)}", key="btn_save_hist"):
+            for sa, fig in figures.items():
+                history.put(month_key, sa, fig)
+            history.save()
+            _save_and_sync(HISTORY_FILE, f"incentive: saved {month_key}")
+            st.success(f"Saved {len(figures)} SA figure(s) for {_month_label(month_key)}.")
+            st.rerun()
+    with c2:
+        if saved and st.button(
+            f"🗑 Remove {_month_label(month_key)} from history", key="btn_del_hist"
+        ):
+            history.months.pop(month_key, None)
+            history.save()
+            _save_and_sync(HISTORY_FILE, f"incentive: removed {month_key}")
+            st.rerun()
+
+    if history.months:
+        rows = []
+        for mk in sorted(history.months):
+            for sa, fig in sorted(history.months[mk].items()):
+                rows.append(
+                    {
+                        "Month": _month_label(mk),
+                        "SA": sa,
+                        "Qualifying sales": fig.qualifying_sales,
+                        "Orders": fig.qualifying_orders,
+                        "GP %": fig.gp_pct,
+                        "Returning": len(fig.returning),
+                    }
+                )
+        with st.expander(f"Stored history — {len(rows)} row(s)"):
+            st.dataframe(
+                pd.DataFrame(rows),
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "Qualifying sales": st.column_config.NumberColumn(format="RM %.2f"),
+                    "GP %": st.column_config.NumberColumn(format="%.1f%%"),
+                },
+            )
+
+
+def page_incentive() -> None:
+    st.title("SA Incentive")
+    scheme: IncentiveScheme = st.session_state["settings"].incentive
+    st.caption(
+        f"**{scheme.name} — {scheme.year_label}.** A separate scheme, paid on "
+        "top of the tier commission and the Year-End Sales Bonus. Two parts "
+        "are assessed each month on figures **accumulated since "
+        f"{_month_label(scheme.start_month)}**: Part A (returning customers) "
+        "and Part B (accumulated sales, gated on "
+        f"{scheme.gp_threshold_pct:.0f}% gross profit). One part = 1× base, "
+        "both = 2×, neither = nothing."
+    )
+    _render_data_loaded_line()
+
+    with st.expander("Setup — cost prices and customer history", expanded=False):
+        _render_cost_upload()
+        st.divider()
+        _render_prior_seed()
+
+    orders = st.session_state.get("orders")
+    if not orders:
+        st.info("Upload a CSV on the **Upload & Review** page first.")
+        return
+
+    month_key, month_orders = _incentive_month_orders()
+    if not month_key:
+        st.warning("No settled orders to report.")
+        return
+
+    sched = scheme.month_for(month_key)
+    if sched is None:
+        st.warning(
+            f"{_month_label(month_key)} is outside the Year 1 window "
+            f"({_month_label(scheme.months[0].key)} – "
+            f"{_month_label(scheme.months[-1].key)}). Nothing to assess."
+        )
+        return
+
+    settings: AppSettings = st.session_state["settings"]
+    history: IncentiveHistory = st.session_state["incentive_history"]
+    store: CostStore = st.session_state["cost_store"]
+    report = compute_incentives(
+        month_orders,
+        scheme,
+        history,
+        month_key,
+        sa_names=settings.sa_list.active_names,
+        cost_store_size=len(store),
+    )
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Scheme month", f"M{sched.m} of 12")
+    m2.metric("Base incentive", fmt_money(sched.base_incentive))
+    m3.metric("SAs assessed", len(report.sa_results))
+    m4.metric("Total incentive payout", fmt_money(report.total_payout))
+
+    st.caption(
+        f"**M{sched.m} targets** — Part A: {sched.returning_target} accumulated "
+        f"returning customers · Part B: {fmt_money(sched.accumulated_sales_target)} "
+        f"accumulated qualifying sales at ≥{scheme.gp_threshold_pct:.0f}% GP · "
+        f"base {fmt_money(sched.base_incentive)} per part "
+        f"(max {fmt_money(sched.base_incentive * 2)})."
+    )
+
+    if not report.sa_results:
+        st.warning("No SA has qualifying orders for this month.")
+        return
+
+    st.subheader("Per-SA incentive")
+    for r in report.sa_results:
+        with st.container(border=True):
+            c1, c2, c3, c4 = st.columns([1.3, 1.1, 1.1, 1])
+            c1.markdown(f"### {r.sa_name}")
+            c1.caption(
+                f"M{r.month_index} · base {fmt_money(r.base_incentive)} · "
+                f"{r.multiplier_label}"
+            )
+
+            a_icon = "✅" if r.part_a_hit else "❌"
+            c2.metric(
+                f"{a_icon} Part A — returning",
+                f"{r.accum_returning} / {r.returning_target}",
+                delta=f"+{r.month_returning} this month" if r.month_returning else None,
+            )
+            b_icon = "✅" if r.part_b_hit else "❌"
+            c3.metric(
+                f"{b_icon} Part B — accum. sales",
+                fmt_money(r.accum_sales),
+                delta=f"target {fmt_money(r.sales_target)}",
+                delta_color="off",
+            )
+            c3.caption(
+                f"GP {r.accum_gp_pct:.1f}% "
+                f"({'passes' if r.gp_gate_passed else 'below'} "
+                f"{r.gp_threshold_pct:.0f}%)"
+            )
+            c4.metric("Incentive", fmt_money(r.payout))
+
+            gap_sales = max(0.0, r.sales_target - r.accum_sales)
+            gap_ret = max(0, r.returning_target - r.accum_returning)
+            bits = []
+            if gap_ret:
+                bits.append(f"**{gap_ret}** more returning customer(s) for Part A")
+            if gap_sales:
+                bits.append(f"**{fmt_money(gap_sales)}** more sales for Part B")
+            if bits:
+                st.caption("Still needed: " + " · ".join(bits) + ".")
+            if r.excluded_note:
+                st.caption(f"⚠️ {r.excluded_note}")
+
+            with st.expander("This month's detail"):
+                d1, d2, d3 = st.columns(3)
+                d1.metric("Qualifying sales", fmt_money(r.month_sales))
+                d1.caption(f"{r.month_orders} qualifying order(s)")
+                d2.metric("Month GP", f"{r.month_gp_pct:.1f}%")
+                d2.caption(f"cost known for {r.cost_coverage_pct:.0f}% of revenue")
+                d3.metric("New returning customers", r.month_returning)
+                if r.returning_customers:
+                    st.caption(
+                        "Returning this month: " + ", ".join(r.returning_customers)
+                    )
+                if r.qualifying_order_numbers:
+                    st.caption(
+                        f"Qualifying orders ({len(r.qualifying_order_numbers)}): "
+                        + ", ".join(r.qualifying_order_numbers)
+                    )
+
+    st.divider()
+    _render_incentive_history_editor(month_key, report.month_figures)
+
+    st.divider()
+    rows = [
+        {
+            "SA": r.sa_name,
+            "Month sales": r.month_sales,
+            "Accum. sales": r.accum_sales,
+            "Sales target": r.sales_target,
+            "GP %": r.accum_gp_pct,
+            "Returning": r.accum_returning,
+            "Return target": r.returning_target,
+            "Part A": "Yes" if r.part_a_hit else "No",
+            "Part B": "Yes" if r.part_b_hit else "No",
+            "Base": r.base_incentive,
+            "Incentive": r.payout,
+        }
+        for r in report.sa_results
+    ]
+    df_out = pd.DataFrame(rows)
+    st.subheader("Summary")
+    st.dataframe(
+        df_out,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Month sales": st.column_config.NumberColumn(format="RM %.2f"),
+            "Accum. sales": st.column_config.NumberColumn(format="RM %.2f"),
+            "Sales target": st.column_config.NumberColumn(format="RM %.2f"),
+            "GP %": st.column_config.NumberColumn(format="%.1f%%"),
+            "Base": st.column_config.NumberColumn(format="RM %.2f"),
+            "Incentive": st.column_config.NumberColumn(format="RM %.2f"),
+        },
+    )
+    st.download_button(
+        "⬇️  Download incentive summary (CSV)",
+        data=df_out.to_csv(index=False).encode("utf-8"),
+        file_name=f"sa_incentive_{month_key}.csv",
+        mime="text/csv",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Page 4: Settings
 # ---------------------------------------------------------------------------
 
 def page_settings() -> None:
@@ -1184,8 +1560,13 @@ def page_settings() -> None:
 
     settings: AppSettings = st.session_state["settings"]
 
-    sa_tab, rate_tab, tier_tab = st.tabs(
-        ["Sales Advisors", "Card rates", "Tiers & channel flat rules"]
+    sa_tab, rate_tab, tier_tab, inc_tab = st.tabs(
+        [
+            "Sales Advisors",
+            "Card rates",
+            "Tiers & channel flat rules",
+            "SA incentive scheme",
+        ]
     )
 
     # ---- SAs ---------------------------------------------------------------
@@ -1511,6 +1892,163 @@ def page_settings() -> None:
             _save_and_sync(TIERS_FILE, "Tiers and channel flat rules")
 
 
+
+    # ---- SA incentive scheme ----------------------------------------------
+    with inc_tab:
+        scheme: IncentiveScheme = settings.incentive
+        st.subheader(f"{scheme.name} — {scheme.year_label}")
+        st.caption(
+            "A separate scheme from the tier commission. Two parts assessed "
+            "each month on figures accumulated since the start month; one part "
+            "pays 1× the base, both pay 2×."
+        )
+
+        r1, r2, r3 = st.columns(3)
+        start_month = r1.text_input(
+            "Start month (YYYY-MM)", value=scheme.start_month, key="inc_start"
+        )
+        min_order = r2.number_input(
+            "Minimum order value (RM)",
+            value=float(scheme.min_order_value),
+            step=100.0,
+            key="inc_minorder",
+            help="An order below this counts neither toward sales nor as a "
+                 "returning customer.",
+        )
+        gp_threshold = r3.number_input(
+            "Gross-profit gate (%)",
+            value=float(scheme.gp_threshold_pct),
+            step=1.0,
+            key="inc_gp",
+            help="Part B only pays when gross profit is at or above this.",
+        )
+
+        r4, r5, r6 = st.columns(3)
+        gp_basis = r4.selectbox(
+            "Gross profit measured on",
+            options=["accumulated", "month"],
+            index=0 if scheme.gp_basis == "accumulated" else 1,
+            key="inc_gpbasis",
+            help="'accumulated' matches Part B's accumulated sales; 'month' "
+                 "tests the reported month on its own.",
+        )
+        sales_basis = r5.selectbox(
+            "Sales counted as",
+            options=["gross", "net"],
+            index=0 if scheme.sales_basis == "gross" else 1,
+            key="inc_salesbasis",
+            help="'gross' = order total after store credit and discount. "
+                 "'net' = after merchant card charges, like the tier commission.",
+        )
+        returning_scope = r6.selectbox(
+            "A customer is returning when",
+            options=["same_sa", "company"],
+            index=0 if scheme.returning_scope == "same_sa" else 1,
+            format_func=lambda v: (
+                "they bought from this SA before" if v == "same_sa"
+                else "they bought from LB before (any SA)"
+            ),
+            key="inc_scope",
+        )
+
+        returning_count = st.selectbox(
+            "When the same customer returns in more than one month, the "
+            "accumulated Part A figure counts them",
+            options=["distinct", "repeat_visits"],
+            index=0 if scheme.returning_count == "distinct" else 1,
+            format_func=lambda v: (
+                "once for the year (distinct customers)" if v == "distinct"
+                else "again every month they come back (repeat visits)"
+            ),
+            key="inc_retcount",
+            help="The scheme document says '220 returning customers by Aug 27' "
+                 "without settling this. 'distinct' is the literal reading and "
+                 "the stricter target.",
+        )
+
+        service_kw = st.text_area(
+            "Service keywords (one per line) — matching line items are stripped "
+            "out of qualifying sales, and a service-only order counts nobody as "
+            "returning",
+            value="\n".join(scheme.service_keywords),
+            key="inc_services",
+            height=120,
+        )
+
+        st.markdown("**Monthly targets**")
+        st.caption(
+            "Accumulated columns are what Part A and Part B are actually "
+            "tested against. The monthly column is shown for reference only."
+        )
+        month_df = pd.DataFrame(
+            [
+                {
+                    "M": m.m,
+                    "Month": m.key,
+                    "Monthly sales": m.monthly_sales_target,
+                    "Accum. sales": m.accumulated_sales_target,
+                    "Returning": m.returning_target,
+                    "Base": m.base_incentive,
+                    "Max (2x)": m.base_incentive * 2,
+                }
+                for m in sorted(scheme.months, key=lambda x: x.m)
+            ]
+        )
+        month_edit = st.data_editor(
+            month_df,
+            num_rows="dynamic",
+            key="inc_months",
+            use_container_width=True,
+            disabled=["Max (2x)"],
+            column_config={
+                "Monthly sales": st.column_config.NumberColumn(format="RM %.0f"),
+                "Accum. sales": st.column_config.NumberColumn(format="RM %.0f"),
+                "Base": st.column_config.NumberColumn(format="RM %.0f"),
+                "Max (2x)": st.column_config.NumberColumn(format="RM %.0f"),
+            },
+        )
+
+        if st.button("Save incentive scheme"):
+            new_months: list[IncentiveMonth] = []
+            bad = False
+            for _, r in month_edit.iterrows():
+                key = str(r["Month"] or "").strip()
+                if not key:
+                    continue
+                if not re.fullmatch(r"\d{4}-\d{2}", key):
+                    st.error(f"Bad month key '{key}' — use YYYY-MM.")
+                    bad = True
+                    continue
+                new_months.append(
+                    IncentiveMonth(
+                        m=int(r["M"] or 0),
+                        key=key,
+                        monthly_sales_target=float(r["Monthly sales"] or 0),
+                        accumulated_sales_target=float(r["Accum. sales"] or 0),
+                        returning_target=int(r["Returning"] or 0),
+                        base_incentive=float(r["Base"] or 0),
+                    )
+                )
+            if not re.fullmatch(r"\d{4}-\d{2}", start_month.strip()):
+                st.error("Start month must be YYYY-MM.")
+                bad = True
+            if not bad:
+                scheme.start_month = start_month.strip()
+                scheme.min_order_value = float(min_order)
+                scheme.gp_threshold_pct = float(gp_threshold)
+                scheme.gp_basis = gp_basis
+                scheme.sales_basis = sales_basis
+                scheme.returning_scope = returning_scope
+                scheme.returning_count = returning_count
+                scheme.service_keywords = [
+                    k.strip() for k in service_kw.splitlines() if k.strip()
+                ]
+                scheme.months = sorted(new_months, key=lambda x: x.m)
+                save_scheme(scheme)
+                _reload_settings()
+                _save_and_sync(SCHEME_FILE, "SA incentive scheme")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -1526,7 +2064,12 @@ def main() -> None:
             st.rerun()
     page = st.sidebar.radio(
         "Navigation",
-        options=["Upload & Review", "Commission Report", "Settings"],
+        options=[
+            "Upload & Review",
+            "Commission Report",
+            "SA Incentive",
+            "Settings",
+        ],
         label_visibility="collapsed",
     )
     st.sidebar.divider()
@@ -1549,6 +2092,8 @@ def main() -> None:
         page_upload()
     elif page == "Commission Report":
         page_report()
+    elif page == "SA Incentive":
+        page_incentive()
     else:
         page_settings()
 
