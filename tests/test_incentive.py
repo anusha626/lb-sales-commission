@@ -26,6 +26,9 @@ def make_scheme(**kw) -> IncentiveScheme:
         min_order_value=1000.0,
         gp_threshold_pct=30.0,
         gp_basis="accumulated",
+        part_b_gate="discount_rate",
+        max_discount_rate_pct=30.0,
+        discount_basis="month",
         sales_basis="gross",
         returning_scope="same_sa",
         service_keywords=["SPA", "POLISH", "SERVICE"],
@@ -49,6 +52,7 @@ def make_scheme(**kw) -> IncentiveScheme:
 def make_order(
     number="#1", gross=10000.0, sa="MINKEI", share=1.0, items=None,
     when="2026-09-05", email="a@b.com", excluded=False, net=None,
+    discount=0.0,
 ) -> OrderResult:
     return OrderResult(
         order_number=number,
@@ -58,6 +62,7 @@ def make_order(
         order_status="Open",
         gross_total=gross,
         net_total=gross if net is None else net,
+        discount_total=discount,
         parsed=ParsedNote(sa_shares=[SAShare(name=sa, share=share)], raw_note=""),
         line_items=items if items is not None else [
             LineItem(sku="S1", name="PREOWNED BAG", price=gross, qty=1, cost=gross * 0.5)
@@ -212,11 +217,13 @@ def test_seeding_only_uses_pre_scheme_orders():
 
 # --- payout ---------------------------------------------------------------
 
-def _big(sa="MINKEI", n=30, when="2026-09-05", gp=0.5):
-    """n orders of RM10,000 at the given gross margin."""
+def _big(sa="MINKEI", n=30, when="2026-09-05", gp=0.5, discounted=0):
+    """n orders of RM10,000 at the given gross margin; the first `discounted`
+    of them carry a discount."""
     return [
         make_order(
             f"#{i}", gross=10000.0, sa=sa, when=when, email=f"c{i}@x.com",
+            discount=50.0 if i < discounted else 0.0,
             items=[LineItem(sku=f"S{i}", name="BAG", price=10000.0, qty=1,
                             cost=10000.0 * (1 - gp))],
         )
@@ -252,7 +259,7 @@ def test_both_parts_pay_two_times_base():
 
 
 def test_gp_below_threshold_blocks_part_b():
-    scheme = make_scheme()
+    scheme = make_scheme(part_b_gate="gross_profit")
     rep = compute_incentives(_big(n=28, gp=0.25), scheme, IncentiveHistory(), "2026-09")
     r = rep.sa_results[0]
     assert r.accum_sales >= r.sales_target
@@ -261,8 +268,8 @@ def test_gp_below_threshold_blocks_part_b():
 
 
 def test_part_a_alone_still_pays_when_gp_fails():
-    """Part A is independent of the gross-profit gate."""
-    scheme = make_scheme()
+    """Part A is independent of the Part B quality gate."""
+    scheme = make_scheme(part_b_gate="gross_profit")
     hist = IncentiveHistory(
         prior_customers={"MINKEI": [hash_identity(f"e:c{i}@x.com") for i in range(12)]}
     )
@@ -332,3 +339,110 @@ def test_history_round_trips_through_json(tmp_path):
     back = IncentiveHistory.load(p)
     assert back.figures("2026-09", "MINKEI").qualifying_sales == 1234.0
     assert back.prior_customers["MINKEI"] == [hash_identity("e:a@b.com")]
+
+
+# --- the Part B discount-rate gate ------------------------------------------
+
+def test_discount_rate_within_ceiling_lets_part_b_pay():
+    """28 orders, 8 discounted = 29% — just inside the 30% ceiling."""
+    scheme = make_scheme(max_discount_rate_pct=30.0)
+    r = compute_incentives(
+        _big(n=28, discounted=8), scheme, IncentiveHistory(), "2026-09"
+    ).sa_results[0]
+    assert r.discount_rate_pct == pytest.approx(28.57, abs=0.01)
+    assert r.discount_gate_passed and r.part_b_hit and r.payout == 200.0
+
+
+def test_too_many_discounted_orders_blocks_part_b():
+    """Same sales, but 15 of 28 discounted = 54% — over the ceiling."""
+    scheme = make_scheme(max_discount_rate_pct=30.0)
+    r = compute_incentives(
+        _big(n=28, discounted=15), scheme, IncentiveHistory(), "2026-09"
+    ).sa_results[0]
+    assert r.accum_sales >= r.sales_target      # the sales target was met
+    assert not r.discount_gate_passed and not r.part_b_hit and r.payout == 0.0
+    assert "15 of 28 orders were discounted" in r.excluded_note
+
+
+def test_discount_magnitude_is_not_graded():
+    """A RM1 discount counts the same as a RM5,000 one — the gate is a count."""
+    scheme = make_scheme(max_discount_rate_pct=30.0)
+    orders = _big(n=28, discounted=0)
+    for o in orders[:15]:
+        o.discount_total = 1.0
+    r = compute_incentives(orders, scheme, IncentiveHistory(), "2026-09").sa_results[0]
+    assert not r.discount_gate_passed
+
+
+def test_poor_margin_no_longer_blocks_part_b_under_the_discount_gate():
+    """A 5%-margin month passes Part B as long as discounting was restrained —
+    the GP test is no longer the gate."""
+    scheme = make_scheme(part_b_gate="discount_rate")
+    r = compute_incentives(
+        _big(n=28, gp=0.05, discounted=2), scheme, IncentiveHistory(), "2026-09"
+    ).sa_results[0]
+    assert not r.gp_gate_passed          # margin really is bad
+    assert r.part_b_hit and r.payout == 200.0
+
+
+def test_both_gates_require_both():
+    scheme = make_scheme(part_b_gate="both", max_discount_rate_pct=30.0)
+    good_gp_bad_disc = compute_incentives(
+        _big(n=28, gp=0.5, discounted=20), scheme, IncentiveHistory(), "2026-09"
+    ).sa_results[0]
+    assert not good_gp_bad_disc.part_b_hit
+    bad_gp_good_disc = compute_incentives(
+        _big(n=28, gp=0.05, discounted=1), scheme, IncentiveHistory(), "2026-09"
+    ).sa_results[0]
+    assert not bad_gp_good_disc.part_b_hit
+    both_good = compute_incentives(
+        _big(n=28, gp=0.5, discounted=1), scheme, IncentiveHistory(), "2026-09"
+    ).sa_results[0]
+    assert both_good.part_b_hit
+
+
+def test_gate_none_pays_on_the_sales_target_alone():
+    scheme = make_scheme(part_b_gate="none")
+    r = compute_incentives(
+        _big(n=28, gp=0.01, discounted=28), scheme, IncentiveHistory(), "2026-09"
+    ).sa_results[0]
+    assert r.part_b_hit and r.payout == 200.0
+
+
+def test_month_basis_ignores_an_earlier_bad_month():
+    """With discount_basis='month', a heavy-discount September does not follow
+    the SA into October."""
+    scheme = make_scheme(discount_basis="month", max_discount_rate_pct=30.0)
+    hist = IncentiveHistory()
+    hist.put("2026-09", "MINKEI", MonthFigures(
+        qualifying_sales=300000.0, qualifying_orders=30, discounted_orders=30,
+        gp_revenue=300000.0, gp_profit=150000.0,
+    ))
+    r = compute_incentives(
+        _big(n=31, when="2026-10-05", discounted=0), scheme, hist, "2026-10"
+    ).sa_results[0]
+    assert r.discount_rate_pct == 0.0 and r.discount_gate_passed and r.part_b_hit
+
+
+def test_accumulated_basis_carries_an_earlier_bad_month():
+    scheme = make_scheme(discount_basis="accumulated", max_discount_rate_pct=30.0)
+    hist = IncentiveHistory()
+    hist.put("2026-09", "MINKEI", MonthFigures(
+        qualifying_sales=300000.0, qualifying_orders=30, discounted_orders=30,
+        gp_revenue=300000.0, gp_profit=150000.0,
+    ))
+    r = compute_incentives(
+        _big(n=31, when="2026-10-05", discounted=0), scheme, hist, "2026-10"
+    ).sa_results[0]
+    # 30 of 61 accumulated orders discounted = 49%
+    assert r.discount_rate_pct == pytest.approx(49.18, abs=0.01)
+    assert not r.discount_gate_passed and not r.part_b_hit
+
+
+def test_no_qualifying_orders_is_not_a_discount_failure():
+    """An empty denominator must not divide by zero or fail the gate."""
+    scheme = make_scheme()
+    r = compute_incentives(
+        _big(n=1, discounted=0), scheme, IncentiveHistory(), "2026-09"
+    ).sa_results[0]
+    assert r.discount_rate_pct == 0.0 and r.discount_gate_passed

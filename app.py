@@ -1383,14 +1383,26 @@ def _render_incentive_history_editor(month_key: str, figures: dict) -> None:
 def page_incentive() -> None:
     st.title("SA Incentive")
     scheme: IncentiveScheme = st.session_state["settings"].incentive
+    gate_text = {
+        "discount_rate": (
+            f"no more than {scheme.max_discount_rate_pct:.0f}% of "
+            f"{'accumulated' if scheme.discount_basis == 'accumulated' else 'the month’s'}"
+            " orders discounted"
+        ),
+        "gross_profit": f"{scheme.gp_threshold_pct:.0f}% gross profit",
+        "both": (
+            f"{scheme.gp_threshold_pct:.0f}% gross profit **and** no more than "
+            f"{scheme.max_discount_rate_pct:.0f}% of orders discounted"
+        ),
+        "none": "no quality gate",
+    }.get(scheme.part_b_gate, scheme.part_b_gate)
     st.caption(
         f"**{scheme.name} — {scheme.year_label}.** A separate scheme, paid on "
         "top of the tier commission and the Year-End Sales Bonus. Two parts "
         "are assessed each month on figures **accumulated since "
         f"{_month_label(scheme.start_month)}**: Part A (returning customers) "
-        "and Part B (accumulated sales, gated on "
-        f"{scheme.gp_threshold_pct:.0f}% gross profit). One part = 1× base, "
-        "both = 2×, neither = nothing."
+        f"and Part B (accumulated sales, gated on {gate_text}). "
+        "One part = 1× base, both = 2×, neither = nothing."
     )
     _render_data_loaded_line()
 
@@ -1439,7 +1451,7 @@ def page_incentive() -> None:
     st.caption(
         f"**M{sched.m} targets** — Part A: {sched.returning_target} accumulated "
         f"returning customers · Part B: {fmt_money(sched.accumulated_sales_target)} "
-        f"accumulated qualifying sales at ≥{scheme.gp_threshold_pct:.0f}% GP · "
+        f"accumulated qualifying sales with {gate_text} · "
         f"base {fmt_money(sched.base_incentive)} per part "
         f"(max {fmt_money(sched.base_incentive * 2)})."
     )
@@ -1471,11 +1483,24 @@ def page_incentive() -> None:
                 delta=f"target {fmt_money(r.sales_target)}",
                 delta_color="off",
             )
-            c3.caption(
-                f"GP {r.accum_gp_pct:.1f}% "
-                f"({'passes' if r.gp_gate_passed else 'below'} "
-                f"{r.gp_threshold_pct:.0f}%)"
-            )
+            if r.part_b_gate == "gross_profit":
+                c3.caption(
+                    f"GP {r.accum_gp_pct:.1f}% "
+                    f"({'passes' if r.gp_gate_passed else 'below'} "
+                    f"{r.gp_threshold_pct:.0f}%)"
+                )
+            elif r.part_b_gate == "none":
+                c3.caption("no quality gate")
+            else:
+                mark = "✓" if r.discount_gate_passed else "✗"
+                c3.caption(
+                    f"{mark} discount rate {r.discount_rate_pct:.0f}% "
+                    f"(max {r.max_discount_rate_pct:.0f}%)"
+                    + (
+                        f" · GP {r.accum_gp_pct:.1f}%"
+                        if r.part_b_gate == "both" else ""
+                    )
+                )
             c4.metric("Incentive", fmt_money(r.payout))
 
             gap_sales = max(0.0, r.sales_target - r.accum_sales)
@@ -1494,8 +1519,19 @@ def page_incentive() -> None:
                 d1, d2, d3 = st.columns(3)
                 d1.metric("Qualifying sales", fmt_money(r.month_sales))
                 d1.caption(f"{r.month_orders} qualifying order(s)")
-                d2.metric("Month GP", f"{r.month_gp_pct:.1f}%")
-                d2.caption(f"cost known for {r.cost_coverage_pct:.0f}% of revenue")
+                if r.part_b_gate in ("discount_rate", "both"):
+                    d2.metric(
+                        "Month discount rate", f"{r.month_discount_rate_pct:.0f}%"
+                    )
+                    d2.caption(
+                        f"{r.month_discounted_orders} of {r.month_orders} "
+                        f"order(s) discounted"
+                    )
+                else:
+                    d2.metric("Month GP", f"{r.month_gp_pct:.1f}%")
+                    d2.caption(
+                        f"cost known for {r.cost_coverage_pct:.0f}% of revenue"
+                    )
                 d3.metric("New returning customers", r.month_returning)
                 if r.returning_customers:
                     st.caption(
@@ -1518,6 +1554,7 @@ def page_incentive() -> None:
             "Accum. sales": r.accum_sales,
             "Sales target": r.sales_target,
             "GP %": r.accum_gp_pct,
+            "Discount rate %": r.discount_rate_pct,
             "Returning": r.accum_returning,
             "Return target": r.returning_target,
             "Part A": "Yes" if r.part_a_hit else "No",
@@ -1538,6 +1575,7 @@ def page_incentive() -> None:
             "Accum. sales": st.column_config.NumberColumn(format="RM %.2f"),
             "Sales target": st.column_config.NumberColumn(format="RM %.2f"),
             "GP %": st.column_config.NumberColumn(format="%.1f%%"),
+            "Discount rate %": st.column_config.NumberColumn(format="%.0f%%"),
             "Base": st.column_config.NumberColumn(format="RM %.2f"),
             "Incentive": st.column_config.NumberColumn(format="RM %.2f"),
         },
@@ -1915,15 +1953,52 @@ def page_settings() -> None:
             help="An order below this counts neither toward sales nor as a "
                  "returning customer.",
         )
-        gp_threshold = r3.number_input(
+        _GATES = ["discount_rate", "gross_profit", "both", "none"]
+        part_b_gate = r3.selectbox(
+            "Part B quality gate",
+            options=_GATES,
+            index=_GATES.index(scheme.part_b_gate)
+            if scheme.part_b_gate in _GATES else 0,
+            format_func=lambda v: {
+                "discount_rate": "Discount rate (share of orders discounted)",
+                "gross_profit": "Gross profit %",
+                "both": "Both — discount rate and gross profit",
+                "none": "None — accumulated sales alone",
+            }[v],
+            key="inc_gate",
+            help="What Part B must satisfy on top of the accumulated sales "
+                 "target.",
+        )
+
+        d1, d2 = st.columns(2)
+        max_discount = d1.number_input(
+            "Maximum discount rate (% of orders)",
+            value=float(scheme.max_discount_rate_pct),
+            step=5.0,
+            min_value=0.0,
+            max_value=100.0,
+            key="inc_maxdisc",
+            help="Part B is blocked when more than this share of the SA's "
+                 "qualifying orders carried any discount. Magnitude is not "
+                 "graded — an order is either discounted or it is not.",
+        )
+        discount_basis = d2.selectbox(
+            "Discount rate measured on",
+            options=["month", "accumulated"],
+            index=0 if scheme.discount_basis == "month" else 1,
+            key="inc_discbasis",
+            help="'month' judges each month on its own orders; 'accumulated' "
+                 "runs the rate since the scheme start.",
+        )
+
+        r4, r5, r6 = st.columns(3)
+        gp_threshold = r4.number_input(
             "Gross-profit gate (%)",
             value=float(scheme.gp_threshold_pct),
             step=1.0,
             key="inc_gp",
-            help="Part B only pays when gross profit is at or above this.",
+            help="Used when the Part B gate above includes gross profit.",
         )
-
-        r4, r5, r6 = st.columns(3)
         gp_basis = r4.selectbox(
             "Gross profit measured on",
             options=["accumulated", "month"],
@@ -2037,6 +2112,9 @@ def page_settings() -> None:
                 scheme.min_order_value = float(min_order)
                 scheme.gp_threshold_pct = float(gp_threshold)
                 scheme.gp_basis = gp_basis
+                scheme.part_b_gate = part_b_gate
+                scheme.max_discount_rate_pct = float(max_discount)
+                scheme.discount_basis = discount_basis
                 scheme.sales_basis = sales_basis
                 scheme.returning_scope = returning_scope
                 scheme.returning_count = returning_count

@@ -212,7 +212,13 @@ Each month, per SA, two parts are assessed **independently** on totals
 | Part | Test | Pays |
 |------|------|------|
 | A | accumulated returning customers ≥ target (10 → 220) | 1× base |
-| B | accumulated qualifying sales ≥ target (280K → 4.57M) **and** gross profit ≥ 30% | 1× base |
+| B | accumulated qualifying sales ≥ target (280K → 4.57M) **and** the month's discount rate ≤ 30% | 1× base |
+
+Part B's quality gate is the **discount rate**: of the SA's qualifying orders
+that month, how many carried any discount (order-level or line-item). Size is
+not graded — an order either carried a discount or it did not. The gross-profit
+test it replaced is still implemented and still shown; switch `part_b_gate` in
+Settings to `gross_profit`, `both` or `none` to change which gate applies.
 
 One part = 1× base, both = 2× base, neither = nothing (no carry-forward as a
 debt). Base runs RM200 (M1) → RM1,700 (M12).
@@ -229,12 +235,14 @@ debt). Base runs RM200 (M1) → RM1,700 (M12).
 
 ### The two data sources it needs
 
-**Cost prices.** The orders export has no cost column; the *products* export
-has `SKU` + `Cost Price`. Upload one on the SA Incentive page and it is merged
-into `data/sku_costs.json`, which **accumulates** — an item sold and delisted
-keeps its cost, so coverage grows month by month. The page shows what
-percentage of qualifying revenue has a known cost; below 90% the GP figure is
-flagged as an estimate.
+**Cost prices.** Only needed when the Part B gate includes gross profit. The
+orders export has no cost column; the *products* export has `SKU` +
+`Cost Price`. Upload one on the SA Incentive page and it is merged into
+`data/sku_costs.json`, which **accumulates** — an item sold and delisted keeps
+its cost, so coverage grows month by month. The page shows what percentage of
+qualifying revenue has a known cost; below 90% the GP figure is flagged as an
+estimate. The discount-rate gate needs none of this: discounts come straight
+off the order export.
 
 **Customer history.** A buyer is only *returning* if the SA sold to them
 before, so purchases from before Sep 2026 have to be seeded once (a button on
@@ -250,8 +258,10 @@ from history — so re-running a month reflects the latest data and settings.
 
 ### Configurable in Settings → SA incentive scheme
 
-Start month, minimum order value, GP threshold and whether GP is measured on
-the accumulated total or the month alone; whether sales count gross or net;
+Start month, minimum order value, which quality gate Part B carries
+(`discount_rate`, `gross_profit`, `both`, `none`), the maximum discount rate
+and whether it is measured on the month or accumulated, the GP threshold and
+its basis; whether sales count gross or net;
 whether "returning" means returning to *this SA* or to LB generally; whether a
 customer returning in several months counts once or every time; the service
 keyword list; and the full M1–M12 target table.
