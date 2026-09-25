@@ -311,6 +311,7 @@ def build_order_results(
                 order_total=gross,
                 sa_list=sa_pool,
                 channel=channel,
+                credit_used=credit_used,
             )
 
         # Channel sale-split (e.g. TikTok): the SA(s) keep only `sa_fraction`

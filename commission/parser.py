@@ -445,6 +445,7 @@ def parse_seller_note(
     order_total: float,
     sa_list: list[str] | None = None,
     channel: str | None = None,
+    credit_used: float = 0.0,
 ) -> ParsedNote:
     """Parse a seller note into structured SA shares + payment portions.
 
@@ -455,6 +456,9 @@ def parse_seller_note(
         sa_list: Active SA names. Defaults to DEFAULT_SAS.
         channel: EasyStore channel (e.g. "online_store"); used as fallback
             when the note is empty.
+        credit_used: Store credit applied to the order (RM, positive). Already
+            deducted from `order_total`, so a note line repeating it is not a
+            payment on this sale — see the store-credit block below.
 
     Returns:
         ParsedNote with sa_shares, payments, and any review_flags.
@@ -564,6 +568,39 @@ def parse_seller_note(
         else:
             flags.append("No payment method detected in note")
 
+    # ---- Store credit already applied to the order ------------------------
+    # A deposit paid on an earlier order the customer backed out of is not
+    # refunded — it is carried over as store credit and shows on this order as
+    # "Credit Used" ("Credit applied" in EasyStore admin). The SA still types
+    # it into the note as a payment ("DEPOSIT ONLINE TRANSFER RM1000 / BALANCE
+    # VISA CREDIT 2539 RM5690"), but no money moves on THIS sale and the gross
+    # is already net of the credit. Counting that line again overstates the
+    # payments by exactly the credit and charges a merchant rate on it, so drop
+    # the portion that matches.
+    if credit_used > 0 and len(payments) > 1:
+        matching = [
+            i
+            for i, p in enumerate(payments)
+            if p.amount is not None and abs(p.amount - credit_used) <= 1.0
+        ]
+        implicit_count = sum(1 for p in payments if p.amount is None)
+        explicit_total = sum(p.amount for p in payments if p.amount is not None)
+        if len(matching) == 1:
+            if implicit_count == 0 and abs(
+                explicit_total - (order_total + credit_used)
+            ) <= 1.0:
+                # Arithmetic is conclusive: the note's own amounts overshoot the
+                # gross by exactly the credit. Drop it silently.
+                payments.pop(matching[0])
+            elif implicit_count == 1:
+                # The balance line carries no amount, so the sum can't confirm
+                # it — drop the credit line but send the order to Review.
+                dropped = payments.pop(matching[0])
+                flags.append(
+                    f"Treated '{dropped.raw_line}' as the RM{credit_used:.2f} store "
+                    "credit already applied to this order — confirm in Review"
+                )
+
     # ---- Allocate implicit remainder & validate sum -----------------------
     explicit_sum = sum(p.amount for p in payments if p.amount is not None)
     implicit_idx = [i for i, p in enumerate(payments) if p.amount is None]
@@ -651,6 +688,15 @@ def parse_seller_note(
     # RM1000", "DEPO ONLINE TRANSFER ...") is recognised and not flagged.
     for line in lines:
         if re.search(r"\bDEPO", line) and _AMOUNT_RE.search(line) and _find_keyword(line) is None:
+            # A methodless deposit that equals the store credit already applied
+            # is the carried-over credit, not an unidentified payment.
+            line_amounts = [
+                float(m.replace(",", "")) for m in _AMOUNT_RE.findall(line)
+            ]
+            if credit_used > 0 and any(
+                abs(a - credit_used) <= 1.0 for a in line_amounts
+            ):
+                continue
             flags.append(
                 f"Deposit line has no payment method — confirm in Review: '{line.strip()}'"
             )
