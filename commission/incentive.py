@@ -78,6 +78,13 @@ class IncentiveScheme(BaseModel):
     # "month" judges each month's discount discipline on its own orders;
     # "accumulated" runs the rate since the scheme start.
     discount_basis: str = "month"
+    # Which orders the discount rate is measured across:
+    #   "all_orders"  every paid order, including ones under the minimum order
+    #                 value — they can't count toward the sales target, but
+    #                 discounting on them is still discounting
+    #   "qualifying"  only the orders that count toward the sales target
+    # Service-only orders are left out either way.
+    discount_scope: str = "all_orders"
     # Which figure counts toward the sales target: "gross" (order total, after
     # store credit and discount) or "net" (after merchant charges).
     sales_basis: str = "gross"
@@ -126,7 +133,13 @@ class MonthFigures(BaseModel):
 
     qualifying_sales: float = 0.0
     qualifying_orders: int = 0
-    # Of those orders, how many carried any discount (order-level or line-item).
+    # Orders the discount rate is measured across. This is NOT the same set as
+    # `qualifying_orders`: with discount_scope="all_orders" it also holds sales
+    # under the minimum order value, which are barred from the sales target but
+    # still count as discounting.
+    discount_base_orders: int = 0
+    # Of `discount_base_orders`, how many carried any discount (order-level or
+    # line-item).
     discounted_orders: int = 0
     # Gross profit on the qualifying sales, and how much of that revenue had a
     # known cost. gp_pct is computed on the covered portion only, so a low
@@ -144,12 +157,15 @@ class MonthFigures(BaseModel):
         return round(self.gp_profit / self.gp_revenue * 100.0, 2) if self.gp_revenue else 0.0
 
     @property
+    def discount_base(self) -> int:
+        """Denominator for the discount rate. Falls back to the qualifying
+        count for figures saved before the two were split apart."""
+        return self.discount_base_orders or self.qualifying_orders
+
+    @property
     def discount_rate_pct(self) -> float:
-        return (
-            round(self.discounted_orders / self.qualifying_orders * 100.0, 2)
-            if self.qualifying_orders
-            else 0.0
-        )
+        base = self.discount_base
+        return round(self.discounted_orders / base * 100.0, 2) if base else 0.0
 
     @property
     def cost_coverage_pct(self) -> float:
@@ -223,6 +239,7 @@ class SAIncentive(BaseModel):
     month_returning: int = 0
     month_gp_pct: float = 0.0
     month_discounted_orders: int = 0
+    month_discount_base_orders: int = 0
     month_discount_rate_pct: float = 0.0
 
     # Accumulated since the scheme start
@@ -242,8 +259,11 @@ class SAIncentive(BaseModel):
     part_b_hit: bool = False
     gp_gate_passed: bool = False
     discount_gate_passed: bool = False
-    # The discount rate actually tested, on whichever basis the scheme uses.
+    # The discount rate actually tested, on whichever basis the scheme uses,
+    # and the two counts behind it.
     discount_rate_pct: float = 0.0
+    discount_numerator: int = 0
+    discount_denominator: int = 0
     payout: float = 0.0
 
     # Working detail for the UI
@@ -320,6 +340,21 @@ def customer_key(email: str, phone: str, first: str, last: str) -> tuple[str, st
 # ---------------------------------------------------------------------------
 # Qualification
 # ---------------------------------------------------------------------------
+
+def is_service_only(order: OrderResult, scheme: IncentiveScheme) -> bool:
+    """True when every line on the order is a service (bag spa, polish, …).
+
+    Checked independently of the minimum order value, because the discount
+    rate looks at orders below that minimum too and a discounted bag spa must
+    not land in it.
+    """
+    items = order.line_items or []
+    if not items:
+        return False
+    total = sum(i.gross for i in items)
+    service = sum(i.gross for i in items if scheme.is_service_name(i.name))
+    return total > 0 and service >= total
+
 
 def qualifying_amount(order: OrderResult, scheme: IncentiveScheme) -> dict | None:
     """The part of `order` that counts toward the incentive, or None if the
@@ -405,7 +440,28 @@ def month_figures_for(
     counted: dict[str, set[str]] = defaultdict(set)
 
     for o in sorted(orders, key=lambda x: x.order_date):
+        if o.excluded:
+            continue
+        service_only = is_service_only(o, scheme)
         q = qualifying_amount(o, scheme)
+
+        # The discount rate has its own order set: with scope "all_orders" it
+        # includes sales under the minimum order value, which can never reach
+        # the sales target but are still discounting. Service-only orders are
+        # out either way.
+        in_discount_base = not service_only and (
+            q is not None or scheme.discount_scope == "all_orders"
+        )
+        if in_discount_base:
+            discounted = (o.discount_total or 0.0) > 0
+            for share in o.parsed.sa_shares:
+                if share.name == HOUSE_ACCOUNT:
+                    continue
+                f = figures[share.name]
+                f.discount_base_orders += 1
+                if discounted:
+                    f.discounted_orders += 1
+
         if q is None or q["is_service_only"]:
             continue
         for share in o.parsed.sa_shares:
@@ -418,8 +474,6 @@ def month_figures_for(
             f.gp_profit = round(f.gp_profit + q["gp_profit"] * share.share, 2)
             f.uncosted_sales = round(f.uncosted_sales + q["uncosted"] * share.share, 2)
             f.qualifying_orders += 1
-            if q["discounted"]:
-                f.discounted_orders += 1
 
             ck = o.customer_key
             if not ck or ck in counted[sa]:
@@ -518,7 +572,7 @@ def compute_incentives(
         accum_gp_rev = cur.gp_revenue
         accum_gp_profit = cur.gp_profit
         accum_uncosted = cur.uncosted_sales
-        accum_orders = cur.qualifying_orders
+        accum_discount_base = cur.discount_base
         accum_discounted = cur.discounted_orders
         returning_keys: set[str] = set(cur.returning)
         returning_visits = len(cur.returning)
@@ -530,7 +584,7 @@ def compute_incentives(
             accum_gp_rev = round(accum_gp_rev + prev.gp_revenue, 2)
             accum_gp_profit = round(accum_gp_profit + prev.gp_profit, 2)
             accum_uncosted = round(accum_uncosted + prev.uncosted_sales, 2)
-            accum_orders += prev.qualifying_orders
+            accum_discount_base += prev.discount_base
             accum_discounted += prev.discounted_orders
             returning_keys.update(prev.returning)
             returning_visits += len(prev.returning)
@@ -556,9 +610,9 @@ def compute_incentives(
         # month with no qualifying orders has no discount problem, so an empty
         # denominator passes rather than dividing by zero.
         if scheme.discount_basis == "accumulated":
-            d_num, d_den = accum_discounted, accum_orders
+            d_num, d_den = accum_discounted, accum_discount_base
         else:
-            d_num, d_den = cur.discounted_orders, cur.qualifying_orders
+            d_num, d_den = cur.discounted_orders, cur.discount_base
         discount_rate = round(d_num / d_den * 100.0, 2) if d_den else 0.0
         discount_ok = discount_rate <= scheme.max_discount_rate_pct
 
@@ -611,13 +665,14 @@ def compute_incentives(
                 month_returning=len(cur.returning),
                 month_gp_pct=cur.gp_pct,
                 month_discounted_orders=cur.discounted_orders,
+                month_discount_base_orders=cur.discount_base,
                 month_discount_rate_pct=cur.discount_rate_pct,
                 accum_sales=accum_sales,
                 accum_returning=accum_returning,
                 accum_gp_pct=gp_pct,
                 accum_discount_rate_pct=(
-                    round(accum_discounted / accum_orders * 100.0, 2)
-                    if accum_orders else 0.0
+                    round(accum_discounted / accum_discount_base * 100.0, 2)
+                    if accum_discount_base else 0.0
                 ),
                 cost_coverage_pct=coverage,
                 sales_target=sched.accumulated_sales_target,
@@ -630,6 +685,8 @@ def compute_incentives(
                 gp_gate_passed=gp_ok,
                 discount_gate_passed=discount_ok,
                 discount_rate_pct=discount_rate,
+                discount_numerator=d_num,
+                discount_denominator=d_den,
                 payout=round(sched.base_incentive * (int(part_a) + int(part_b)), 2),
                 qualifying_order_numbers=sorted(set(qual_orders.get(sa, []))),
                 returning_customers=sorted(

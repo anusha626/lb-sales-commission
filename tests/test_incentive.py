@@ -29,6 +29,7 @@ def make_scheme(**kw) -> IncentiveScheme:
         part_b_gate="discount_rate",
         max_discount_rate_pct=30.0,
         discount_basis="month",
+        discount_scope="all_orders",
         sales_basis="gross",
         returning_scope="same_sa",
         service_keywords=["SPA", "POLISH", "SERVICE"],
@@ -446,3 +447,78 @@ def test_no_qualifying_orders_is_not_a_discount_failure():
         _big(n=1, discounted=0), scheme, IncentiveHistory(), "2026-09"
     ).sa_results[0]
     assert r.discount_rate_pct == 0.0 and r.discount_gate_passed
+
+
+# --- which orders the discount rate is measured across -----------------------
+
+def test_small_orders_count_toward_the_discount_rate():
+    """An order under RM1,000 can't reach the sales target, but discounting on
+    it is still discounting — so it lands in the rate."""
+    scheme = make_scheme(discount_scope="all_orders")
+    orders = _big(n=28, discounted=0)                     # 28 clean big orders
+    orders += [
+        make_order(f"#s{i}", gross=500.0, discount=50.0, email=f"s{i}@x.com",
+                   items=[LineItem(sku=f"T{i}", name="BAG", price=500.0,
+                                   qty=1, cost=200.0)])
+        for i in range(12)
+    ]
+    figs = month_figures_for(orders, scheme, IncentiveHistory(), "2026-09")
+    f = figs["MINKEI"]
+    assert f.qualifying_orders == 28        # sales target ignores the small ones
+    assert f.discount_base_orders == 40     # the rate does not
+    assert f.discounted_orders == 12
+    assert f.discount_rate_pct == pytest.approx(30.0)
+
+
+def test_qualifying_scope_ignores_small_orders():
+    """The old behaviour is still available."""
+    scheme = make_scheme(discount_scope="qualifying")
+    orders = _big(n=28, discounted=0) + [
+        make_order(f"#s{i}", gross=500.0, discount=50.0, email=f"s{i}@x.com")
+        for i in range(12)
+    ]
+    f = month_figures_for(orders, scheme, IncentiveHistory(), "2026-09")["MINKEI"]
+    assert f.discount_base_orders == 28 and f.discounted_orders == 0
+    assert f.discount_rate_pct == 0.0
+
+
+def test_small_orders_never_reach_the_sales_total():
+    """Including them in the rate must not leak them into Part B's sales."""
+    scheme = make_scheme(discount_scope="all_orders")
+    orders = _big(n=28, discounted=0) + [
+        make_order("#s1", gross=999.0, discount=10.0, email="s1@x.com")
+    ]
+    r = compute_incentives(orders, scheme, IncentiveHistory(), "2026-09").sa_results[0]
+    assert r.accum_sales == pytest.approx(280000.0)   # the RM999 is not in there
+    assert r.discount_denominator == 29               # but it is in the rate
+
+
+def test_discounted_service_order_is_never_counted():
+    """A discounted bag spa is not a pricing failure — service is out of the
+    rate at any order value."""
+    scheme = make_scheme(discount_scope="all_orders")
+    orders = _big(n=10, discounted=0) + [
+        make_order(f"#sv{i}", gross=190.0, discount=20.0, email=f"v{i}@x.com",
+                   items=[LineItem(sku=f"SV{i}", name="893808 polish service",
+                                   price=190.0, qty=1, cost=10.0)])
+        for i in range(10)
+    ]
+    f = month_figures_for(orders, scheme, IncentiveHistory(), "2026-09")["MINKEI"]
+    assert f.discount_base_orders == 10 and f.discounted_orders == 0
+
+
+def test_cancelled_orders_stay_out_of_the_rate():
+    scheme = make_scheme(discount_scope="all_orders")
+    orders = _big(n=10, discounted=0) + [
+        make_order("#x", gross=5000.0, discount=500.0, excluded=True)
+    ]
+    f = month_figures_for(orders, scheme, IncentiveHistory(), "2026-09")["MINKEI"]
+    assert f.discount_base_orders == 10 and f.discounted_orders == 0
+
+
+def test_old_history_without_the_split_still_reads():
+    """Figures saved before the denominators were split fall back to the
+    qualifying count rather than dividing by zero."""
+    fig = MonthFigures(qualifying_orders=20, discounted_orders=5)
+    assert fig.discount_base == 20
+    assert fig.discount_rate_pct == pytest.approx(25.0)

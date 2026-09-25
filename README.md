@@ -214,11 +214,20 @@ Each month, per SA, two parts are assessed **independently** on totals
 | A | accumulated returning customers ≥ target (10 → 220) | 1× base |
 | B | accumulated qualifying sales ≥ target (280K → 4.57M) **and** the month's discount rate ≤ 30% | 1× base |
 
-Part B's quality gate is the **discount rate**: of the SA's qualifying orders
-that month, how many carried any discount (order-level or line-item). Size is
-not graded — an order either carried a discount or it did not. The gross-profit
-test it replaced is still implemented and still shown; switch `part_b_gate` in
-Settings to `gross_profit`, `both` or `none` to change which gate applies.
+Part B's quality gate is the **discount rate**: of the SA's orders that month,
+how many carried any discount (order-level or line-item). Size is not graded —
+an order either carried a discount or it did not.
+
+Note the two denominators differ on purpose. The sales target counts only
+*qualifying* orders (≥ RM1,000, non-service, fully paid). The discount rate
+counts **every paid order including those under RM1,000** — such an order can
+never reach the sales target, but discounting on it is still discounting.
+Service-only orders are out of both. Set `discount_scope` to `qualifying` to
+make the two sets match again.
+
+The gross-profit test it replaced is still implemented and still shown; switch
+`part_b_gate` in Settings to `gross_profit`, `both` or `none` to change which
+gate applies.
 
 One part = 1× base, both = 2× base, neither = nothing (no carry-forward as a
 debt). Base runs RM200 (M1) → RM1,700 (M12).

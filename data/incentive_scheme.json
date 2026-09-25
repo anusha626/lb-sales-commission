@@ -8,6 +8,7 @@
   "part_b_gate": "discount_rate",
   "max_discount_rate_pct": 30.0,
   "discount_basis": "month",
+  "discount_scope": "all_orders",
   "sales_basis": "gross",
   "returning_scope": "same_sa",
   "returning_count": "distinct",

@@ -1494,7 +1494,8 @@ def page_incentive() -> None:
             else:
                 mark = "✓" if r.discount_gate_passed else "✗"
                 c3.caption(
-                    f"{mark} discount rate {r.discount_rate_pct:.0f}% "
+                    f"{mark} discount rate {r.discount_numerator}/"
+                    f"{r.discount_denominator} = {r.discount_rate_pct:.0f}% "
                     f"(max {r.max_discount_rate_pct:.0f}%)"
                     + (
                         f" · GP {r.accum_gp_pct:.1f}%"
@@ -1524,8 +1525,8 @@ def page_incentive() -> None:
                         "Month discount rate", f"{r.month_discount_rate_pct:.0f}%"
                     )
                     d2.caption(
-                        f"{r.month_discounted_orders} of {r.month_orders} "
-                        f"order(s) discounted"
+                        f"{r.month_discounted_orders} of "
+                        f"{r.month_discount_base_orders} order(s) discounted"
                     )
                 else:
                     d2.metric("Month GP", f"{r.month_gp_pct:.1f}%")
@@ -1982,6 +1983,18 @@ def page_settings() -> None:
                  "qualifying orders carried any discount. Magnitude is not "
                  "graded — an order is either discounted or it is not.",
         )
+        discount_scope = d2.selectbox(
+            "Discount rate measured across",
+            options=["all_orders", "qualifying"],
+            index=0 if scheme.discount_scope == "all_orders" else 1,
+            format_func=lambda v: (
+                "every paid order, including under the minimum"
+                if v == "all_orders"
+                else "only orders counting toward the sales target"
+            ),
+            key="inc_discscope",
+            help="Service-only orders are left out either way.",
+        )
         discount_basis = d2.selectbox(
             "Discount rate measured on",
             options=["month", "accumulated"],
@@ -2115,6 +2128,7 @@ def page_settings() -> None:
                 scheme.part_b_gate = part_b_gate
                 scheme.max_discount_rate_pct = float(max_discount)
                 scheme.discount_basis = discount_basis
+                scheme.discount_scope = discount_scope
                 scheme.sales_basis = sales_basis
                 scheme.returning_scope = returning_scope
                 scheme.returning_count = returning_count
