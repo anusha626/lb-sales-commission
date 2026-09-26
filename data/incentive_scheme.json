@@ -6,7 +6,7 @@
   "gp_threshold_pct": 30.0,
   "gp_basis": "accumulated",
   "part_b_gate": "discount_rate",
-  "max_discount_rate_pct": 30.0,
+  "max_discount_rate_pct": 40.0,
   "discount_basis": "month",
   "discount_scope": "all_orders",
   "sales_basis": "gross",

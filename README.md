@@ -49,7 +49,7 @@ data/
     rates.json             Versioned merchant rate card
     incentive_scheme.json  SA incentive targets (Part A / Part B, M1–M12)
     incentive_history.json Saved monthly incentive figures (accumulates)
-    sku_costs.json         SKU → cost price, for the 30% gross-profit gate
+    sku_costs.json         SKU → cost price, for the gross-profit gate
 tests/
     test_parser.py         Real-note fixtures (21 cases, all from sample_data.csv)
     test_incentive.py      SA incentive: qualification, Part A/B, accumulation
@@ -212,7 +212,7 @@ Each month, per SA, two parts are assessed **independently** on totals
 | Part | Test | Pays |
 |------|------|------|
 | A | accumulated returning customers ≥ target (10 → 220) | 1× base |
-| B | accumulated qualifying sales ≥ target (280K → 4.57M) **and** the month's discount rate ≤ 30% | 1× base |
+| B | accumulated qualifying sales ≥ target (280K → 4.57M) **and** the month's discount rate ≤ 40% | 1× base |
 
 Part B's quality gate is the **discount rate**: of the SA's orders that month,
 how many carried any discount (order-level or line-item). Size is not graded —
