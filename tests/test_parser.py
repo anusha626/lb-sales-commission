@@ -624,3 +624,79 @@ def test_foreign_card_flag_detected():
     # a non-foreign card stays local
     q = parse_seller_note("LILY\nVISA CREDIT 1234 RM5000", order_total=5000.0)
     assert q.payments[0].is_foreign is False
+
+
+# ---------------------------------------------------------------------------
+# Store credit carried over from an abandoned order
+# ---------------------------------------------------------------------------
+
+
+def test_credit_deposit_not_counted_as_payment():
+    """#10688: a RM1,000 deposit on a bag the customer dropped is kept as store
+    credit, not refunded. The next order shows "Credit applied -1,000" and the
+    note still lists the deposit, but no money moves on this sale — the portion
+    must be dropped and the payments must reconcile to the gross."""
+    p = parse_seller_note(
+        "CHRISTY\nCHATDADDY\nDEPOSIT ONLINE TRANSFER RM1000\n"
+        "BALANCE VISA CREDIT 2539 RM5690",
+        order_total=5690.0,
+        credit_used=1000.0,
+    )
+    assert [(x.method, x.amount) for x in p.payments] == [
+        (PaymentMethod.VISA_CREDIT, 5690.0)
+    ]
+    assert not any("differs from order total" in f for f in p.review_flags)
+
+
+def test_credit_deposit_with_implicit_balance_flags_for_review():
+    """Same shape but the balance line carries no amount, so the arithmetic
+    can't confirm the credit — drop it, but send the order to Review."""
+    p = parse_seller_note(
+        "CHRISTY\nDEPOSIT ONLINE TRANSFER RM1000\nBALANCE VISA CREDIT 2539",
+        order_total=5690.0,
+        credit_used=1000.0,
+    )
+    assert [(x.method, x.amount) for x in p.payments] == [
+        (PaymentMethod.VISA_CREDIT, 5690.0)
+    ]
+    assert any("store credit already applied" in f for f in p.review_flags)
+
+
+def test_methodless_deposit_matching_credit_not_flagged():
+    """A bare "DEPOSIT RM1000" that equals the store credit is the carried-over
+    credit, not an unidentified payment method."""
+    p = parse_seller_note(
+        "CHRISTY\nDEPOSIT RM1000\nVISA 8407 RM5690",
+        order_total=5690.0,
+        credit_used=1000.0,
+    )
+    assert not _has_deposit_flag(p)
+    assert not any("differs from order total" in f for f in p.review_flags)
+
+
+def test_genuine_deposit_unaffected_when_no_credit():
+    """No store credit on the order → a deposit is a real payment as before."""
+    p = parse_seller_note(
+        "LILY WALK IN PJ\nDEPOSIT TRANSFER RM1000\nVISA 8407 RM5990",
+        order_total=6990.0,
+    )
+    assert [(x.method, x.amount) for x in p.payments] == [
+        (PaymentMethod.BANK_TRANSFER, 1000.0),
+        (PaymentMethod.VISA_CREDIT, 5990.0),
+    ]
+    assert not p.review_flags
+
+
+def test_deposit_kept_when_amounts_already_reconcile():
+    """Credit applied AND a genuine deposit of the same size: the note's amounts
+    already add up to the gross, so nothing is dropped."""
+    p = parse_seller_note(
+        "LILY WALK IN PJ\nDEPOSIT TRANSFER RM1000\nVISA 8407 RM4990",
+        order_total=5990.0,
+        credit_used=1000.0,
+    )
+    assert [(x.method, x.amount) for x in p.payments] == [
+        (PaymentMethod.BANK_TRANSFER, 1000.0),
+        (PaymentMethod.VISA_CREDIT, 4990.0),
+    ]
+    assert not any("differs from order total" in f for f in p.review_flags)
