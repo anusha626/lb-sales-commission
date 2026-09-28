@@ -58,6 +58,7 @@ from commission.settings import (
     RateTableVersion,
     SARecord,
     SA_FILE,
+    is_stale,
     TIERS_FILE,
     load_all,
     save_rates,
@@ -401,6 +402,29 @@ def _ensure_state() -> None:
     st.session_state.setdefault("cost_store", CostStore.load())
     # Saved per-month incentive figures (Part A / Part B accumulate on them).
     st.session_state.setdefault("incentive_history", IncentiveHistory.load())
+    _refresh_stale_state()
+
+
+def _refresh_stale_state() -> None:
+    # A deploy swaps the code under sessions that are still open, leaving
+    # them with objects built before any newly added field existed. Rebuild
+    # those instead of crashing on the missing attribute.
+    if is_stale(st.session_state["settings"]):
+        st.session_state["settings"] = load_all()
+    if is_stale(st.session_state["incentive_history"]):
+        st.session_state["incentive_history"] = IncentiveHistory.load()
+    overrides = st.session_state["overrides"]
+    if is_stale(overrides):
+        st.session_state["overrides"] = {
+            k: ParsedNote.model_validate(v.model_dump())
+            for k, v in overrides.items()
+        }
+    if is_stale(st.session_state["orders"]):
+        args = st.session_state.get("_recompute_args")
+        if args:
+            _recompute_orders(**args)
+        else:
+            st.session_state["orders"] = None
 
 
 def _reload_settings() -> None:
