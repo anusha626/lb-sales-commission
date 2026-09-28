@@ -24,6 +24,7 @@ def make_scheme(**kw) -> IncentiveScheme:
     base = dict(
         start_month="2026-09",
         min_order_value=1000.0,
+        event_sales_weight=0.5,
         gp_threshold_pct=30.0,
         gp_basis="accumulated",
         part_b_gate="discount_rate",
@@ -522,3 +523,87 @@ def test_old_history_without_the_split_still_reads():
     fig = MonthFigures(qualifying_orders=20, discounted_orders=5)
     assert fig.discount_base == 20
     assert fig.discount_rate_pct == pytest.approx(25.0)
+
+
+# --- event sales count at half weight ---------------------------------------
+
+def _event_order(number="#e1", gross=10000.0, **kw):
+    """An order dated inside a promo window carries event_rate."""
+    o = make_order(number, gross=gross, **kw)
+    o.event_rate = 0.8
+    return o
+
+
+def test_event_sales_count_at_half_weight():
+    """RM500,000 of event sales contributes RM250,000 to the target."""
+    scheme = make_scheme(event_sales_weight=0.5)
+    q = qualifying_amount(_event_order(gross=500000.0), scheme)
+    assert q["sales"] == pytest.approx(250000.0)
+
+
+def test_non_event_sales_count_in_full():
+    scheme = make_scheme(event_sales_weight=0.5)
+    q = qualifying_amount(make_order(gross=500000.0), scheme)
+    assert q["sales"] == pytest.approx(500000.0)
+
+
+def test_event_weight_does_not_change_gross_profit_percent():
+    """Halving the contribution must not make the margin look different."""
+    scheme = make_scheme(event_sales_weight=0.5)
+    items = [LineItem(sku="E", name="BAG", price=10000.0, qty=1, cost=6000.0)]
+    normal = qualifying_amount(make_order(gross=10000.0, items=items), scheme)
+    event = qualifying_amount(_event_order(gross=10000.0, items=items), scheme)
+    assert event["sales"] == pytest.approx(normal["sales"] / 2)
+    n_gp = normal["gp_profit"] / normal["gp_revenue"] * 100
+    e_gp = event["gp_profit"] / event["gp_revenue"] * 100
+    assert e_gp == pytest.approx(n_gp, abs=0.01)   # 40% either way
+
+
+def test_event_customer_is_still_a_returning_customer():
+    """The weight is on sales only — a person is not half a customer."""
+    scheme = make_scheme(event_sales_weight=0.5)
+    hist = IncentiveHistory(prior_customers={"MINKEI": [hash_identity("e:a@b.com")]})
+    figs = month_figures_for([_event_order()], scheme, hist, "2026-09")
+    assert figs["MINKEI"].returning == [hash_identity("e:a@b.com")]
+
+
+def test_event_order_counts_in_full_in_the_discount_rate():
+    """Half weight applies to the sales target, not the order count."""
+    scheme = make_scheme(event_sales_weight=0.5)
+    orders = [_event_order(f"#e{i}", discount=50.0 if i < 2 else 0.0,
+                           email=f"e{i}@x.com") for i in range(4)]
+    f = month_figures_for(orders, scheme, IncentiveHistory(), "2026-09")["MINKEI"]
+    assert f.discount_base_orders == 4 and f.discounted_orders == 2
+    assert f.discount_rate_pct == pytest.approx(50.0)
+
+
+def test_event_weight_of_one_disables_the_haircut():
+    scheme = make_scheme(event_sales_weight=1.0)
+    q = qualifying_amount(_event_order(gross=10000.0), scheme)
+    assert q["sales"] == pytest.approx(10000.0)
+
+
+# --- no minimum order value --------------------------------------------------
+
+def test_with_no_minimum_every_order_counts_toward_sales():
+    """The RM1,000 floor was dropped: a small order now reaches the target and
+    can make its buyer a returning customer."""
+    scheme = make_scheme(min_order_value=0.0)
+    hist = IncentiveHistory(prior_customers={"MINKEI": [hash_identity("e:a@b.com")]})
+    small = make_order("#s", gross=500.0,
+                       items=[LineItem(sku="S", name="BAG", price=500.0,
+                                       qty=1, cost=200.0)])
+    figs = month_figures_for([small], scheme, hist, "2026-09")
+    f = figs["MINKEI"]
+    assert f.qualifying_sales == pytest.approx(500.0)
+    assert f.qualifying_orders == 1
+    assert f.returning == [hash_identity("e:a@b.com")]
+
+
+def test_service_only_still_excluded_with_no_minimum():
+    """Dropping the floor must not let service revenue in."""
+    scheme = make_scheme(min_order_value=0.0)
+    spa = make_order("#v", gross=190.0,
+                     items=[LineItem(sku="V", name="893808 polish service",
+                                     price=190.0, qty=1, cost=10.0)])
+    assert month_figures_for([spa], scheme, IncentiveHistory(), "2026-09") == {}

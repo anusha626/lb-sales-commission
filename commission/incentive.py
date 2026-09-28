@@ -61,7 +61,16 @@ class IncentiveScheme(BaseModel):
     name: str = "SA Return Customer & Sales Growth Incentive"
     year_label: str = "Year 1"
     start_month: str = "2026-09"
-    min_order_value: float = 1000.0
+    # Minimum order value for the sales target. 0 = every paid order counts,
+    # whatever its size (the RM1,000 floor was dropped on 28 Sep 2026).
+    min_order_value: float = 0.0
+    # Sales made inside a promo/event window count toward the accumulated
+    # sales target at this weight — event stock is sold thin, so RM500,000 of
+    # event sales contributes RM250,000 at 0.5. Applies to the incentive sales
+    # target ONLY: the tier commission is untouched, an event customer is
+    # still a returning customer, and event orders still count in full in the
+    # discount rate.
+    event_sales_weight: float = 0.5
     gp_threshold_pct: float = 30.0
     # "accumulated" tests GP on everything since the start month (consistent
     # with Part B's accumulated sales); "month" tests the reported month alone.
@@ -368,6 +377,12 @@ def qualifying_amount(order: OrderResult, scheme: IncentiveScheme) -> dict | Non
     base = order.net_total if scheme.sales_basis == "net" else order.gross_total
     if order.gross_total < scheme.min_order_value:
         return None
+    # An order dated inside a promo window carries event_rate; its sales count
+    # toward the target at a reduced weight, applied at the end so cost scales
+    # with revenue and the margin still reads true.
+    weight = (
+        scheme.event_sales_weight if order.event_rate is not None else 1.0
+    )
     # Any discount at all — order-level or line-item — makes this a discounted
     # order for the Part B discount-rate gate. Magnitude is not graded.
     discounted = (order.discount_total or 0.0) > 0
@@ -378,10 +393,10 @@ def qualifying_amount(order: OrderResult, scheme: IncentiveScheme) -> dict | Non
         # treat cost as unknown, so it lands in `uncosted` and drags coverage
         # down visibly rather than silently faking a margin.
         return {
-            "sales": round(base, 2),
+            "sales": round(base * weight, 2),
             "gp_revenue": 0.0,
             "gp_profit": 0.0,
-            "uncosted": round(base, 2),
+            "uncosted": round(base * weight, 2),
             "service": 0.0,
             "is_service_only": False,
             "discounted": discounted,
@@ -413,12 +428,15 @@ def qualifying_amount(order: OrderResult, scheme: IncentiveScheme) -> dict | Non
         else:
             gp_revenue += rev
             gp_profit += rev - ct
+    # The weight scales revenue and cost together, so gp_profit / gp_revenue —
+    # the margin — is identical to the unweighted order; only the size of the
+    # contribution changes.
     return {
-        "sales": round(goods * scale, 2),
-        "gp_revenue": round(gp_revenue, 2),
-        "gp_profit": round(gp_profit, 2),
-        "uncosted": round(uncosted, 2),
-        "service": round(service * scale, 2),
+        "sales": round(goods * scale * weight, 2),
+        "gp_revenue": round(gp_revenue * weight, 2),
+        "gp_profit": round(gp_profit * weight, 2),
+        "uncosted": round(uncosted * weight, 2),
+        "service": round(service * scale * weight, 2),
         "is_service_only": False,
         "discounted": discounted,
     }

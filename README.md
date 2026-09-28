@@ -220,10 +220,9 @@ an order either carried a discount or it did not.
 
 Note the two denominators differ on purpose. The sales target counts only
 *qualifying* orders (≥ RM1,000, non-service, fully paid). The discount rate
-counts **every paid order including those under RM1,000** — such an order can
-never reach the sales target, but discounting on it is still discounting.
-Service-only orders are out of both. Set `discount_scope` to `qualifying` to
-make the two sets match again.
+counts every paid order. With the RM1,000 floor gone the two sets now coincide;
+`discount_scope` is kept for the case where a minimum is reintroduced.
+Service-only orders are out of both.
 
 The gross-profit test it replaced is still implemented and still shown; switch
 `part_b_gate` in Settings to `gross_profit`, `both` or `none` to change which
@@ -235,11 +234,18 @@ debt). Base runs RM200 (M1) → RM1,700 (M12).
 ### What qualifies
 
 - the order must be kept by the main pipeline (fully paid, not cancelled)
-- order total ≥ RM1,000 — tested on the whole order, not the SA's share
+- **no minimum order value** — the RM1,000 floor was dropped on 28 Sep 2026, so
+  every paid order counts toward the sales target and can make its buyer a
+  returning customer
 - service revenue (bag spa, polish, …) is stripped out; a service-only order
   counts no sales and makes nobody a returning customer
-- **event / sale stock counts** — that exclusion was removed from the scheme on
-  25 Sep 2026
+- **event / sale stock counts**, but at a reduced weight: sales inside a
+  declared event window contribute to the sales target at `event_sales_weight`
+  (default **50%**) — RM500K of event sales counts as RM250K. The weight scales
+  revenue and cost together, so the reported margin is unchanged. It applies to
+  the incentive sales target only, never to the tier commission; an event buyer
+  is a returning customer in full, and event orders count in full in the
+  discount rate.
 - sales and customers are credited by the SA's share % on the order
 
 ### The two data sources it needs
