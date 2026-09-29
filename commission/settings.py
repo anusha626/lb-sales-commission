@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -239,6 +240,27 @@ class AppSettings(BaseModel):
     # SA Return Customer & Sales Growth Incentive — a separate scheme from the
     # tier commission above (see incentive.py).
     incentive: IncentiveScheme
+
+
+def is_stale(obj: Any) -> bool:
+    """True when `obj`, or any model nested in it, predates the current code.
+
+    A deploy reloads the modules while open browser sessions keep the objects
+    they already built. Those objects lack any field added since, and reading
+    one raises AttributeError — so the app checks for them and rebuilds.
+    """
+    if isinstance(obj, BaseModel):
+        cls = type(obj)
+        current = getattr(sys.modules.get(cls.__module__), cls.__name__, cls)
+        fields = getattr(current, "model_fields", {})
+        if any(name not in obj.__dict__ for name in fields):
+            return True
+        return any(is_stale(v) for v in obj.__dict__.values())
+    if isinstance(obj, dict):
+        return any(is_stale(v) for v in obj.values())
+    if isinstance(obj, (list, tuple, set)):
+        return any(is_stale(v) for v in obj)
+    return False
 
 
 def load_all() -> AppSettings:
