@@ -34,7 +34,7 @@ def make_scheme(**kw) -> IncentiveScheme:
         discount_scope="all_orders",
         sales_basis="gross",
         returning_scope="same_sa",
-        exclude_service=True,
+        service_counts_from="2026-10",
         discipline_bonus_amount=100.0,
         discipline_bonus_max_rate_pct=10.0,
         discipline_bonus_min_orders=50,
@@ -619,34 +619,64 @@ def test_service_only_still_excluded_with_no_minimum():
 
 # --- service revenue now counts ---------------------------------------------
 
-def test_service_revenue_counts_toward_sales_by_default():
-    """From 29 Sep 2026 a service order is just a sale."""
-    scheme = make_scheme(exclude_service=False)
-    order = make_order(gross=5000.0, items=[
+def test_service_revenue_counts_from_october():
+    """From M2 (OCT 2026) a service line is just part of the sale."""
+    scheme = make_scheme(service_counts_from="2026-10")
+    order = make_order(gross=5000.0, when="2026-10-05", items=[
         LineItem(sku="B1", name="PREOWNED BAG", price=4800.0, qty=1, cost=2000.0),
         LineItem(sku="SV", name="893808 polish service", price=200.0, qty=1, cost=50.0),
     ])
-    q = qualifying_amount(order, scheme)
-    assert q["service"] == 0.0                     # nothing is stripped out
+    q = qualifying_amount(order, scheme, "2026-10")
+    assert q["service"] == 0.0                     # nothing stripped out
     assert q["sales"] == pytest.approx(5000.0)     # the full order counts
 
 
-def test_service_only_order_counts_as_a_sale_and_a_customer():
-    scheme = make_scheme(exclude_service=False)
+def test_service_revenue_is_still_stripped_in_september():
+    """M1 keeps the original carve-out."""
+    scheme = make_scheme(service_counts_from="2026-10")
+    order = make_order(gross=5000.0, when="2026-09-05", items=[
+        LineItem(sku="B1", name="PREOWNED BAG", price=4800.0, qty=1, cost=2000.0),
+        LineItem(sku="SV", name="893808 polish service", price=200.0, qty=1, cost=50.0),
+    ])
+    q = qualifying_amount(order, scheme, "2026-09")
+    assert q["service"] == pytest.approx(200.0)
+    assert q["sales"] == pytest.approx(4800.0)
+
+
+def test_service_only_order_counts_as_a_sale_and_a_customer_from_october():
+    scheme = make_scheme(service_counts_from="2026-10")
     hist = IncentiveHistory(prior_customers={"MINKEI": [hash_identity("e:a@b.com")]})
-    spa = make_order("#v", gross=1500.0, items=[
+    spa = make_order("#v", gross=1500.0, when="2026-10-05", items=[
         LineItem(sku="V", name="BAG SPA DELUXE", price=1500.0, qty=1, cost=100.0)])
-    assert is_service_only(spa, scheme) is False
-    f = month_figures_for([spa], scheme, hist, "2026-09")["MINKEI"]
+    assert is_service_only(spa, scheme, "2026-10") is False
+    f = month_figures_for([spa], scheme, hist, "2026-10")["MINKEI"]
     assert f.qualifying_sales == pytest.approx(1500.0)
     assert f.returning == [hash_identity("e:a@b.com")]
 
 
-def test_service_carve_out_can_be_reinstated():
-    scheme = make_scheme(exclude_service=True)
-    spa = make_order("#v", gross=1500.0, items=[
+def test_service_only_order_counts_nobody_in_september():
+    scheme = make_scheme(service_counts_from="2026-10")
+    hist = IncentiveHistory(prior_customers={"MINKEI": [hash_identity("e:a@b.com")]})
+    spa = make_order("#v", gross=1500.0, when="2026-09-05", items=[
         LineItem(sku="V", name="BAG SPA DELUXE", price=1500.0, qty=1, cost=100.0)])
-    assert is_service_only(spa, scheme) is True
+    assert is_service_only(spa, scheme, "2026-09") is True
+    assert month_figures_for([spa], scheme, hist, "2026-09") == {}
+
+
+def test_the_cutoff_is_on_the_payout_month_not_the_order_date():
+    """An August order settled in October is judged by October's rule."""
+    scheme = make_scheme(service_counts_from="2026-10")
+    spa = make_order("#v", gross=1500.0, when="2026-08-20", items=[
+        LineItem(sku="V", name="BAG SPA DELUXE", price=1500.0, qty=1, cost=100.0)])
+    assert is_service_only(spa, scheme, "2026-10") is False
+    assert is_service_only(spa, scheme, "2026-09") is True
+
+
+def test_empty_cutoff_makes_service_count_always():
+    scheme = make_scheme(service_counts_from="")
+    spa = make_order("#v", gross=1500.0, when="2026-09-05", items=[
+        LineItem(sku="V", name="BAG SPA DELUXE", price=1500.0, qty=1, cost=100.0)])
+    assert is_service_only(spa, scheme, "2026-09") is False
 
 
 # --- the RM100 discipline bonus ----------------------------------------------

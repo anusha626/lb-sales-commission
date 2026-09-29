@@ -107,10 +107,11 @@ class IncentiveScheme(BaseModel):
     # repeat purchase, so a loyal customer can be counted again each month.
     returning_count: str = "distinct"
     # Service revenue (bag spa, polish, …) counts toward the sales target like
-    # any other sale as of 29 Sep 2026, and a service-only buyer counts as a
-    # returning customer. Set exclude_service back to True to reinstate the
-    # old carve-out; `service_keywords` is what it would match on.
-    exclude_service: bool = False
+    # any other sale, and a service-only buyer counts as a returning customer —
+    # but only from this payout month onward. Months before it keep the
+    # original carve-out, so M1 (SEP 2026) still excludes service. "" makes
+    # service count in every month; a far-future month disables it entirely.
+    service_counts_from: str = "2026-10"
     service_keywords: list[str] = Field(default_factory=list)
     # Discipline bonus: a flat extra amount for a month whose discount rate is
     # at or below `discipline_bonus_max_rate_pct`. Only paid when the SA has
@@ -134,9 +135,17 @@ class IncentiveScheme(BaseModel):
         out = [m for m in sorted(self.months, key=lambda x: x.key) if m.key <= key]
         return out
 
-    def is_service_name(self, name: str) -> bool:
-        if not self.exclude_service:
+    def excludes_service_in(self, month_key: str | None) -> bool:
+        """Whether service revenue is carved out of the payout month `month_key`."""
+        cutoff = (self.service_counts_from or "").strip()
+        if not cutoff:
             return False
+        if not month_key:
+            return False
+        return month_key < cutoff
+
+    def is_service_name(self, name: str) -> bool:
+        """Pure keyword match — callers decide whether the month excludes it."""
         n = (name or "").upper()
         return any(k.upper() in n for k in self.service_keywords if k.strip())
 
@@ -372,14 +381,21 @@ def customer_key(email: str, phone: str, first: str, last: str) -> tuple[str, st
 # Qualification
 # ---------------------------------------------------------------------------
 
-def is_service_only(order: OrderResult, scheme: IncentiveScheme) -> bool:
+def _month_of(order: OrderResult) -> str:
+    d = order.settlement_date or order.order_date
+    return d.strftime("%Y-%m")
+
+
+def is_service_only(
+    order: OrderResult, scheme: IncentiveScheme, month_key: str | None = None
+) -> bool:
     """True when every line on the order is a service (bag spa, polish, …).
 
     Checked independently of the minimum order value, because the discount
     rate looks at orders below that minimum too and a discounted bag spa must
     not land in it.
     """
-    if not scheme.exclude_service:
+    if not scheme.excludes_service_in(month_key or _month_of(order)):
         return False
     items = order.line_items or []
     if not items:
@@ -389,7 +405,9 @@ def is_service_only(order: OrderResult, scheme: IncentiveScheme) -> bool:
     return total > 0 and service >= total
 
 
-def qualifying_amount(order: OrderResult, scheme: IncentiveScheme) -> dict | None:
+def qualifying_amount(
+    order: OrderResult, scheme: IncentiveScheme, month_key: str | None = None
+) -> dict | None:
     """The part of `order` that counts toward the incentive, or None if the
     whole order is disqualified.
 
@@ -411,6 +429,8 @@ def qualifying_amount(order: OrderResult, scheme: IncentiveScheme) -> dict | Non
     # order for the Part B discount-rate gate. Magnitude is not graded.
     discounted = (order.discount_total or 0.0) > 0
 
+    strip_service = scheme.excludes_service_in(month_key or _month_of(order))
+
     items = order.line_items or []
     if not items:
         # No line-item rows in the export — take the order at face value and
@@ -427,7 +447,11 @@ def qualifying_amount(order: OrderResult, scheme: IncentiveScheme) -> dict | Non
         }
 
     item_gross = sum(i.gross for i in items)
-    service = sum(i.gross for i in items if scheme.is_service_name(i.name))
+    service = (
+        sum(i.gross for i in items if scheme.is_service_name(i.name))
+        if strip_service
+        else 0.0
+    )
     goods = item_gross - service
     if goods <= 0:
         # Service-only order: no qualifying sales and no returning customer.
@@ -443,7 +467,7 @@ def qualifying_amount(order: OrderResult, scheme: IncentiveScheme) -> dict | Non
 
     gp_revenue = gp_profit = uncosted = 0.0
     for i in items:
-        if scheme.is_service_name(i.name):
+        if strip_service and scheme.is_service_name(i.name):
             continue
         rev = i.gross * scale
         ct = i.cost_total
@@ -484,8 +508,8 @@ def month_figures_for(
     for o in sorted(orders, key=lambda x: x.order_date):
         if o.excluded:
             continue
-        service_only = is_service_only(o, scheme)
-        q = qualifying_amount(o, scheme)
+        service_only = is_service_only(o, scheme, month_key)
+        q = qualifying_amount(o, scheme, month_key)
 
         # The discount rate has its own order set: with scope "all_orders" it
         # includes sales under the minimum order value, which can never reach
@@ -601,7 +625,7 @@ def compute_incentives(
     labels: dict[str, str] = {}
     for o in orders:
         labels[o.customer_key] = o.customer_label or o.customer_key
-        q = qualifying_amount(o, scheme)
+        q = qualifying_amount(o, scheme, month_key)
         if q is None or q["is_service_only"]:
             continue
         for s in o.parsed.sa_shares:

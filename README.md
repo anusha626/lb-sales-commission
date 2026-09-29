@@ -242,9 +242,12 @@ debt). Base runs RM200 (M1) → RM1,700 (M12).
 - **no minimum order value** — the RM1,000 floor was dropped on 28 Sep 2026, so
   every paid order counts toward the sales target and can make its buyer a
   returning customer
-- **service revenue counts** — a bag spa or polish counts toward the sales
-  target like any other sale, and a service-only buyer counts as a returning
-  customer (`exclude_service: true` reinstates the old carve-out)
+- **service revenue counts from OCT 2026** (`service_counts_from`) — from M2 a
+  bag spa or polish counts toward the sales target like any other sale, and a
+  service-only buyer counts as a returning customer. Payout months before the
+  cutoff keep the carve-out, so M1 (SEP 2026) still excludes service. The test
+  is on the **payout month**, not the order date, so an August order settled in
+  October is judged by October's rule. Blank = service always counts.
 - **event / sale stock counts**, but at a reduced weight: sales inside a
   declared event window contribute to the sales target at `event_sales_weight`
   (default **50%**) — RM500K of event sales counts as RM250K. The weight scales

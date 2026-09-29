@@ -13,7 +13,7 @@
   "sales_basis": "gross",
   "returning_scope": "same_sa",
   "returning_count": "distinct",
-  "exclude_service": false,
+  "service_counts_from": "2026-10",
   "service_keywords": [
     "SPA",
     "POLISH",

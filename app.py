@@ -2122,12 +2122,12 @@ def page_settings() -> None:
             help="Stops a handful of undiscounted orders reading as perfect "
                  "discipline.",
         )
-        exclude_service = b3.checkbox(
-            "Exclude service revenue",
-            value=bool(scheme.exclude_service),
-            key="inc_exclservice",
-            help="Off (the rule since 29 Sep 2026): a bag spa counts toward "
-                 "the sales target and its buyer can be a returning customer.",
+        service_from = b3.text_input(
+            "Service revenue counts from (YYYY-MM)",
+            value=scheme.service_counts_from,
+            key="inc_servicefrom",
+            help="Payout months before this keep the old carve-out, so M1 "
+                 "(SEP 2026) excludes service. Blank = service always counts.",
         )
 
         service_kw = st.text_area(
@@ -2196,6 +2196,10 @@ def page_settings() -> None:
             if not re.fullmatch(r"\d{4}-\d{2}", start_month.strip()):
                 st.error("Start month must be YYYY-MM.")
                 bad = True
+            sf = service_from.strip()
+            if sf and not re.fullmatch(r"\d{4}-\d{2}", sf):
+                st.error("Service-from month must be YYYY-MM, or blank.")
+                bad = True
             if not bad:
                 scheme.start_month = start_month.strip()
                 scheme.min_order_value = float(min_order)
@@ -2211,7 +2215,7 @@ def page_settings() -> None:
                 scheme.discipline_bonus_amount = float(bonus_amount)
                 scheme.discipline_bonus_max_rate_pct = float(bonus_ceiling)
                 scheme.discipline_bonus_min_orders = int(bonus_min_orders)
-                scheme.exclude_service = bool(exclude_service)
+                scheme.service_counts_from = sf
                 scheme.service_keywords = [
                     k.strip() for k in service_kw.splitlines() if k.strip()
                 ]
