@@ -957,9 +957,9 @@ def build_workbook(
 _INC_HEADERS = [
     "SA", "Month sales", "Accum. sales", "Sales target", "Disc. rate %",
     "Disc. gate", "GP %", "Returning", "Return target", "Part A", "Part B",
-    "Base", "Multiplier", "Incentive",
+    "Base", "Multiplier", "Bonus", "Incentive",
 ]
-_INC_MONEY_COLS = {2, 3, 4, 12, 14}
+_INC_MONEY_COLS = {2, 3, 4, 12, 14, 15}
 _INC_PCT_COLS = {5, 7}
 
 
@@ -1006,6 +1006,7 @@ def _build_incentive_sheet(ws, report) -> None:
             "Yes" if res.part_b_hit else "No",
             res.base_incentive,
             res.multiplier_label,
+            res.discipline_bonus,
             res.payout,
         ]
         for c, v in enumerate(values, start=1):
@@ -1020,12 +1021,12 @@ def _build_incentive_sheet(ws, report) -> None:
             if c >= 2:
                 cell.alignment = Alignment(horizontal="right")
         if res.payout:
-            ws.cell(row=r, column=14).font = Font(bold=True, color=_TEAL)
+            ws.cell(row=r, column=15).font = Font(bold=True, color=_TEAL)
 
     if report.sa_results:
         total = r + 1
         ws.cell(row=total, column=1, value="TOTAL").font = Font(bold=True)
-        tc = ws.cell(row=total, column=14, value=report.total_payout)
+        tc = ws.cell(row=total, column=15, value=report.total_payout)
         tc.font = Font(bold=True)
         tc.number_format = _MONEY_FMT
         for c in range(1, len(_INC_HEADERS) + 1):
@@ -1042,7 +1043,7 @@ def _build_incentive_sheet(ws, report) -> None:
                 Font(italic=True, color=_MUTED)
             )
 
-    widths = [14, 15, 15, 15, 11, 10, 9, 11, 13, 9, 9, 11, 11, 14]
+    widths = [14, 15, 15, 15, 11, 10, 9, 11, 13, 9, 9, 11, 11, 11, 14]
     for c, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(c)].width = w
     ws.freeze_panes = ws.cell(row=hdr + 1, column=1)

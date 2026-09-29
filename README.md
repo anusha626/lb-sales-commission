@@ -213,6 +213,11 @@ Each month, per SA, two parts are assessed **independently** on totals
 |------|------|------|
 | A | accumulated returning customers ≥ target (10 → 220) | 1× base |
 | B | accumulated qualifying sales ≥ target (280K → 4.57M) **and** the month's discount rate ≤ 40% | 1× base |
+| Bonus | discount rate ≤ 10% on ≥ 50 orders, **and** A or B already earned | flat RM100 |
+
+The discipline bonus rides on top: it never pays on its own, so a spotless but
+idle month earns nothing, and the 50-order floor stops a handful of
+undiscounted orders reading as perfect discipline.
 
 Part B's quality gate is the **discount rate**: of the SA's orders that month,
 how many carried any discount (order-level or line-item). Size is not graded —
@@ -237,8 +242,9 @@ debt). Base runs RM200 (M1) → RM1,700 (M12).
 - **no minimum order value** — the RM1,000 floor was dropped on 28 Sep 2026, so
   every paid order counts toward the sales target and can make its buyer a
   returning customer
-- service revenue (bag spa, polish, …) is stripped out; a service-only order
-  counts no sales and makes nobody a returning customer
+- **service revenue counts** — a bag spa or polish counts toward the sales
+  target like any other sale, and a service-only buyer counts as a returning
+  customer (`exclude_service: true` reinstates the old carve-out)
 - **event / sale stock counts**, but at a reduced weight: sales inside a
   declared event window contribute to the sales target at `event_sales_weight`
   (default **50%**) — RM500K of event sales counts as RM250K. The weight scales

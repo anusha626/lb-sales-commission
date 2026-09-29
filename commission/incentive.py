@@ -106,7 +106,21 @@ class IncentiveScheme(BaseModel):
     # literal reading of "returning customers"); "repeat_visits" counts every
     # repeat purchase, so a loyal customer can be counted again each month.
     returning_count: str = "distinct"
+    # Service revenue (bag spa, polish, …) counts toward the sales target like
+    # any other sale as of 29 Sep 2026, and a service-only buyer counts as a
+    # returning customer. Set exclude_service back to True to reinstate the
+    # old carve-out; `service_keywords` is what it would match on.
+    exclude_service: bool = False
     service_keywords: list[str] = Field(default_factory=list)
+    # Discipline bonus: a flat extra amount for a month whose discount rate is
+    # at or below `discipline_bonus_max_rate_pct`. Only paid when the SA has
+    # already earned Part A or Part B that month.
+    discipline_bonus_amount: float = 100.0
+    discipline_bonus_max_rate_pct: float = 10.0
+    # Minimum orders in the month to be eligible for the bonus. Without it a
+    # handful of orders with none discounted reads as perfect discipline: six
+    # orders and no discount is not the same achievement as sixty.
+    discipline_bonus_min_orders: int = 50
     months: list[IncentiveMonth] = Field(default_factory=list)
 
     def month_for(self, key: str) -> IncentiveMonth | None:
@@ -121,6 +135,8 @@ class IncentiveScheme(BaseModel):
         return out
 
     def is_service_name(self, name: str) -> bool:
+        if not self.exclude_service:
+            return False
         n = (name or "").upper()
         return any(k.upper() in n for k in self.service_keywords if k.strip())
 
@@ -273,6 +289,12 @@ class SAIncentive(BaseModel):
     discount_rate_pct: float = 0.0
     discount_numerator: int = 0
     discount_denominator: int = 0
+    # Flat extra for holding the discount rate at or under the bonus ceiling,
+    # paid only when Part A or Part B already paid this month.
+    discipline_bonus: float = 0.0
+    discipline_bonus_earned: bool = False
+    discipline_bonus_max_rate_pct: float = 10.0
+    discipline_bonus_min_orders: int = 50
     payout: float = 0.0
 
     # Working detail for the UI
@@ -357,6 +379,8 @@ def is_service_only(order: OrderResult, scheme: IncentiveScheme) -> bool:
     rate looks at orders below that minimum too and a discounted bag spa must
     not land in it.
     """
+    if not scheme.exclude_service:
+        return False
     items = order.line_items or []
     if not items:
         return False
@@ -646,6 +670,19 @@ def compute_incentives(
             quality_ok = discount_ok
         part_b = sales_ok and quality_ok
 
+        # Discipline bonus — needs a part to have paid AND a clean month.
+        # Order count is always the month's own, whatever basis the discount
+        # rate uses — the floor is about this month's volume.
+        bonus_orders = cur.discount_base
+        bonus = (
+            round(scheme.discipline_bonus_amount, 2)
+            if (part_a or part_b)
+            and bonus_orders >= scheme.discipline_bonus_min_orders
+            and d_den
+            and discount_rate <= scheme.discipline_bonus_max_rate_pct
+            else 0.0
+        )
+
         note = ""
         if sales_ok and not quality_ok:
             reasons = []
@@ -705,7 +742,13 @@ def compute_incentives(
                 discount_rate_pct=discount_rate,
                 discount_numerator=d_num,
                 discount_denominator=d_den,
-                payout=round(sched.base_incentive * (int(part_a) + int(part_b)), 2),
+                payout=round(
+                    sched.base_incentive * (int(part_a) + int(part_b)) + bonus, 2
+                ),
+                discipline_bonus=bonus,
+                discipline_bonus_earned=bool(bonus),
+                discipline_bonus_max_rate_pct=scheme.discipline_bonus_max_rate_pct,
+                discipline_bonus_min_orders=scheme.discipline_bonus_min_orders,
                 qualifying_order_numbers=sorted(set(qual_orders.get(sa, []))),
                 returning_customers=sorted(
                     labels.get(k, k) for k in cur.returning
