@@ -483,3 +483,64 @@ def test_event_window_flat_rate_and_counts_in_tier():
     assert s.tier_rate_pct == 1.2               # 410k -> top bracket
     # non-event 400k @ 1.2% = 4800 ; event 10k @ 0.8% = 80
     assert s.commission_amount == 4880.0
+
+
+def test_workbook_carries_incentive_into_summary_and_sa_sheet():
+    """The SA incentive must appear on the Summary tab (Incentive + Total
+    Payout columns) and on the SA's own sheet as a block feeding a TOTAL
+    PAYOUT line, not only on the separate SA Incentive sheet."""
+    import io
+    from openpyxl import load_workbook
+    from commission.excel_export import build_workbook
+    from commission.incentive import IncentiveReport, SAIncentive
+    from commission.settings import load_all
+
+    orders = [
+        _make_order(order_number="#I1", sa_shares=[("MICHELLE", 1.0)], gross=5000.0),
+        _make_order(order_number="#I2", sa_shares=[("MINKEI", 1.0)], gross=3000.0),
+    ]
+    settings = load_all()
+    report = compute_commissions(orders, settings.tiers)
+    inc = IncentiveReport(
+        month_key="2026-09", month_index=1,
+        sa_results=[
+            SAIncentive(
+                sa_name="MICHELLE", month_key="2026-09", month_index=1,
+                base_incentive=500.0, part_a_hit=True, payout=500.0,
+                accum_sales=90000.0, sales_target=80000.0,
+            ),
+            SAIncentive(
+                sa_name="MINKEI", month_key="2026-09", month_index=1,
+                base_incentive=500.0, payout=0.0,
+            ),
+        ],
+    )
+    wb = load_workbook(io.BytesIO(build_workbook(
+        orders, report, settings, all_orders=orders, incentive_report=inc,
+    )))
+
+    ws = wb["Summary"]
+    headers = [ws.cell(row=1, column=c).value for c in range(1, 11)]
+    assert headers[8:] == ["Incentive (RM)", "Total Payout (RM)"]
+    by_name = {ws.cell(row=r, column=1).value: r for r in range(2, ws.max_row + 1)}
+    assert ws.cell(row=by_name["MICHELLE"], column=9).value == 500.0
+    assert ws.cell(row=by_name["MINKEI"], column=9).value == 0.0
+    assert ws.cell(row=by_name["MICHELLE"], column=10).value == f"=H{by_name['MICHELLE']}+I{by_name['MICHELLE']}"
+    assert ws.cell(row=by_name["SA TOTAL"], column=9).value.startswith("=SUM(I2:I")
+
+    sa = wb["SA - MICHELLE"]
+    labels = {str(sa.cell(row=r, column=1).value or ""): r for r in range(1, sa.max_row + 1)}
+    comm_row = labels["TOTAL COMMISSION"]
+    inc_row = labels["SA INCENTIVE"]
+    assert sa.cell(row=inc_row, column=11).value == 500.0
+    total_row = next(r for l, r in labels.items() if l.startswith("TOTAL PAYOUT"))
+    assert sa.cell(row=total_row, column=11).value == f"=K{comm_row}+K{inc_row}"
+    assert any("TOTAL PAYOUT above" in l for l in labels)
+    assert not any("TOTAL COMMISSION above" in l for l in labels)
+
+    # No incentive report: layout unchanged, sign-off still names TOTAL COMMISSION.
+    wb2 = load_workbook(io.BytesIO(build_workbook(orders, report, settings, all_orders=orders)))
+    assert wb2["Summary"].cell(row=1, column=9).value is None
+    labels2 = [str(wb2["SA - MICHELLE"].cell(row=r, column=1).value or "")
+               for r in range(1, wb2["SA - MICHELLE"].max_row + 1)]
+    assert any("TOTAL COMMISSION above" in l for l in labels2)

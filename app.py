@@ -1154,6 +1154,21 @@ def page_report() -> None:
                 c3.metric("Gross", fmt_money(s.total_gross_sales))
                 c3.metric("Net", fmt_money(s.total_net_sales))
                 c4.metric("Commission", fmt_money(s.commission_amount))
+                inc_res = (
+                    next((r for r in inc_report.sa_results if r.sa_name == s.sa_name), None)
+                    if inc_report is not None else None
+                )
+                if inc_res is not None:
+                    c4.metric(
+                        "SA incentive",
+                        fmt_money(inc_res.payout),
+                        help=f"Separate scheme, M{inc_res.month_index}: "
+                             f"{inc_res.multiplier_label} base. Paid on top of commission.",
+                    )
+                    c4.metric(
+                        "Total payout",
+                        fmt_money(round(s.commission_amount + inc_res.payout, 2)),
+                    )
 
                 # getattr guards: if a stale SACommission from a not-yet-fully-
                 # reloaded module lacks the clearance fields, degrade quietly

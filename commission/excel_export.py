@@ -97,7 +97,11 @@ def _build_summary_sheet(
     ws: Worksheet,
     summaries: list[SACommission],
     house: HouseSalesSummary | None,
+    incentives: dict[str, float] | None = None,
 ) -> None:
+    """One row per SA. When the month has an SA incentive scheme, two extra
+    columns carry each SA's incentive and the total payout (commission +
+    incentive) so one table shows everything owed."""
     ws.title = "Summary"
     headers = [
         "Sales Advisor",
@@ -109,6 +113,8 @@ def _build_summary_sheet(
         "Tier Rate",
         "Commission (RM)",
     ]
+    if incentives is not None:
+        headers += ["Incentive (RM)", "Total Payout (RM)"]
     _write_header(ws, headers)
     for i, s in enumerate(summaries, start=2):
         ws.cell(row=i, column=1, value=s.sa_name)
@@ -119,6 +125,10 @@ def _build_summary_sheet(
         ws.cell(row=i, column=6, value=s.tier_label)
         ws.cell(row=i, column=7, value=s.tier_rate_pct).number_format = _PCT_FMT
         ws.cell(row=i, column=8, value=s.commission_amount).number_format = _MONEY_FMT
+        if incentives is not None:
+            inc = round(incentives.get(s.sa_name, 0.0), 2)
+            ws.cell(row=i, column=9, value=inc).number_format = _MONEY_FMT
+            ws.cell(row=i, column=10, value=f"=H{i}+I{i}").number_format = _MONEY_FMT
 
     sa_count = len(summaries)
     if summaries:
@@ -129,6 +139,12 @@ def _build_summary_sheet(
             cell = ws.cell(row=last, column=col, value=sum(getattr(s, attr) for s in summaries))
             cell.number_format = _MONEY_FMT
             cell.font = Font(bold=True)
+        if incentives is not None:
+            for col in (9, 10):
+                L = get_column_letter(col)
+                cell = ws.cell(row=last, column=col, value=f"=SUM({L}2:{L}{sa_count + 1})")
+                cell.number_format = _MONEY_FMT
+                cell.font = Font(bold=True)
 
     if house:
         # Visual gap, then a separate "House sales" row in italic.
@@ -524,15 +540,81 @@ def _sa_bonus_table(ws: Worksheet, row: int, sa: SACommission, achieved_formula:
     return row + 1, f"K{tgt_row + 4}"
 
 
-def _sa_signoff(ws: Worksheet, row: int) -> int:
+def _sa_incentive_block(ws: Worksheet, row: int, inc, commission_cell: str) -> int:
+    """SA incentive summary (the separate scheme) followed by a TOTAL PAYOUT
+    line that adds it to the commission total. Returns the row of the TOTAL
+    PAYOUT line."""
+    _sa_section(
+        ws, row,
+        f"SA INCENTIVE  ·  payout month M{inc.month_index}  ·  "
+        "Part A / Part B measured on accumulated totals  ·  paid on top of commission",
+        "6D28D9",
+    )
+    row += 1
+    specs = [
+        ("Accumulated sales vs target",
+         f"RM{inc.accum_sales:,.2f} / RM{inc.sales_target:,.2f}", None),
+        ("Part A (sales target)", "Achieved" if inc.part_a_hit else "Not achieved", None),
+        ("Part B (returning customers / discount gate)",
+         "Achieved" if inc.part_b_hit else "Not achieved", None),
+        ("Base incentive per part", inc.base_incentive, _MONEY_FMT),
+        ("Multiplier", inc.multiplier_label, None),
+    ]
+    if inc.discipline_bonus_earned or inc.discipline_bonus:
+        specs.append(("Discipline bonus", inc.discipline_bonus, _MONEY_FMT))
+    specs.append(("SA INCENTIVE", inc.payout, _MONEY_FMT))
+    inc_cell = None
+    for i, (label, val, fmt) in enumerate(specs):
+        is_total = i == len(specs) - 1
+        for col in range(1, _SA_NC + 1):
+            c = ws.cell(row=row, column=col)
+            c.border = _BORDER
+            if is_total:
+                c.fill = PatternFill("solid", fgColor="EDE9FE")
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=10)
+        lc = ws.cell(row=row, column=1, value=label)
+        lc.alignment = Alignment(horizontal="right", indent=1)
+        lc.font = Font(bold=is_total, color=_INK)
+        vc = ws.cell(row=row, column=11, value=val)
+        if fmt:
+            vc.number_format = fmt
+        vc.alignment = Alignment(horizontal="right")
+        vc.font = Font(bold=is_total, color="6D28D9" if is_total else _INK)
+        if is_total:
+            inc_cell = f"K{row}"
+        row += 1
+    if inc.excluded_note:
+        note = ws.cell(row=row, column=1, value=inc.excluded_note)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=_SA_NC)
+        note.font = Font(size=9, italic=True, color=_MUTED)
+        note.alignment = Alignment(indent=1)
+        row += 1
+
+    row += 1
+    for col in range(1, _SA_NC + 1):
+        ws.cell(row=row, column=col).fill = PatternFill("solid", fgColor=_TEAL)
+        ws.cell(row=row, column=col).border = _BORDER
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=10)
+    g = ws.cell(row=row, column=1, value="TOTAL PAYOUT  (commission + SA incentive)")
+    g.font = Font(bold=True, size=12, color="FFFFFF")
+    g.alignment = Alignment(horizontal="right", vertical="center", indent=1)
+    gc = ws.cell(row=row, column=11, value=f"={commission_cell}+{inc_cell}")
+    gc.number_format = _MONEY_FMT
+    gc.font = Font(bold=True, size=12, color="FFFFFF")
+    gc.alignment = Alignment(horizontal="right")
+    ws.row_dimensions[row].height = 22
+    return row
+
+
+def _sa_signoff(ws: Worksheet, row: int, total_label: str = "TOTAL COMMISSION") -> int:
     """Payout sign-off block: a verification statement plus Prepared / Verified /
-    Approved signature lines with name and date. Signing it marks the commission
+    Approved signature lines with name and date. Signing it marks the amount
     on this sheet as checked and cleared for payout. Returns the next row."""
     _sa_section(ws, row, "PAYOUT SIGN-OFF", _INK)
     row += 1
     stmt = ws.cell(
         row=row, column=1,
-        value="I confirm the TOTAL COMMISSION above has been reviewed, verified "
+        value=f"I confirm the {total_label} above has been reviewed, verified "
               "correct, and is approved for payout.",
     )
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=_SA_NC)
@@ -565,6 +647,7 @@ def _build_sa_sheet(
     payout_month: str | None = None,
     payout_label: str | None = None,
     refunds: list | None = None,
+    incentive=None,
 ) -> None:
     ws.title = f"SA - {sa.sa_name}"[:31]  # Excel sheet name limit
     ws.sheet_view.showGridLines = False
@@ -714,6 +797,13 @@ def _build_sa_sheet(
     gc.font = Font(bold=True, size=12, color="FFFFFF")
     gc.alignment = Alignment(horizontal="right")
     ws.row_dimensions[row].height = 22
+    commission_cell = f"K{row}"
+    signoff_label = "TOTAL COMMISSION"
+
+    # ---- SA incentive (separate scheme, paid on top) + total payout --------
+    if incentive is not None:
+        row = _sa_incentive_block(ws, row + 2, incentive, commission_cell)
+        signoff_label = "TOTAL PAYOUT"
 
     # ---- Monthly Google reviews (manual entry) -----------------------------
     gr_row = row + 2
@@ -735,7 +825,7 @@ def _build_sa_sheet(
     ws.row_dimensions[gr_row].height = 20
 
     # ---- Payout sign-off ---------------------------------------------------
-    _sa_signoff(ws, gr_row + 2)
+    _sa_signoff(ws, gr_row + 2, total_label=signoff_label)
 
     # ---- Live tier helper (top-right: M2 = sales net, M3 = tier rate) -------
     kh = ws.cell(row=1, column=12, value="LIVE TIER")
@@ -914,9 +1004,21 @@ def build_workbook(
     silently disappear. Defaults to `orders` if not given.
     """
     audit = all_orders if all_orders is not None else orders
+    # SA incentive results by name: the Summary tab gets Incentive / Total
+    # Payout columns and each SA sheet an incentive block when the month has
+    # a scheme (an empty report still means "scheme on, nothing payable").
+    inc_by_sa = (
+        {r.sa_name: r for r in incentive_report.sa_results}
+        if incentive_report is not None else None
+    )
     wb = Workbook()
     summary_ws = wb.active
-    _build_summary_sheet(summary_ws, report.sa_summaries, report.house)
+    _build_summary_sheet(
+        summary_ws, report.sa_summaries, report.house,
+        incentives=(
+            {n: r.payout for n, r in inc_by_sa.items()} if inc_by_sa is not None else None
+        ),
+    )
 
     # Group refunded orders by the SA(s) named on them.
     refunds_by_sa: dict[str, list] = {}
@@ -933,6 +1035,7 @@ def build_workbook(
             ws, s, by_number, settings.tiers,
             payout_month=payout_month, payout_label=payout_label,
             refunds=refunds_by_sa.get(s.sa_name),
+            incentive=inc_by_sa.get(s.sa_name) if inc_by_sa is not None else None,
         )
 
     if report.house:
