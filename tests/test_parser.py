@@ -762,3 +762,26 @@ def test_multi_word_sa_name_in_amount_split():
         ("TAN WEN WEN", 0.7),
         ("CHRISTY", 0.3),
     ]
+
+
+def test_self_check_flags_shares_that_disagree_with_note():
+    """The parser cross-checks its shares against the note so a detector gap
+    lands in Review instead of silently paying the wrong SA."""
+    from commission.models import SAShare
+    from commission.parser import _share_sanity_flags
+
+    pool = ["CHRISTY", "TAN WEN WEN", "MICHELLE"]
+    note = "CHRISTY 70% TAN WEN WEN 30%\nWHATSAPP VISA CREDIT 7511 RM10800"
+    flags = _share_sanity_flags(note, pool, [SAShare(name="CHRISTY", share=1.0)])
+    assert any("TAN WEN WEN" in f and "no share" in f for f in flags)
+    assert any("percentage split" in f for f in flags)
+
+    # Correct shares: nothing to flag.
+    good = [SAShare(name="CHRISTY", share=0.7), SAShare(name="TAN WEN WEN", share=0.3)]
+    assert _share_sanity_flags(note, pool, good) == []
+    # Company sale: staff names in the note are informational, not a share.
+    assert _share_sanity_flags(
+        "COMPANY SALES CHRISTY\nCASH RM100", pool, [SAShare(name=HOUSE_ACCOUNT, share=1.0)]
+    ) == []
+    # Already flagged as no-SA: don't pile on a second flag.
+    assert _share_sanity_flags("TAN WEN WEN\nCASH RM100", pool, []) == []

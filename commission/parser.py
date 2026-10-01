@@ -471,6 +471,56 @@ def _detect_single_sa(note: str, sa_pool: list[str]) -> SAShare | None:
     return None
 
 
+def _names_mentioned(note: str, sa_pool: list[str]) -> list[str]:
+    """Every pool name the note mentions, matched as whole word runs (longest
+    first, words consumed once matched). Used only to cross-check the shares."""
+    words = [(m.start(), m.group(0)) for m in re.finditer(r"[A-Z]{2,}", note.upper())]
+    max_words = max((len(n.split()) for n in sa_pool), default=1)
+    found: list[str] = []
+    i = 0
+    while i < len(words):
+        hit = None
+        for width in range(min(max_words, len(words) - i), 0, -1):
+            tok = " ".join(w for _, w in words[i : i + width])
+            m = process.extractOne(tok, sa_pool, scorer=fuzz.ratio)
+            if m and m[1] >= SA_FUZZY_THRESHOLD:
+                hit, i = m[0], i + width
+                break
+        if hit is None:
+            i += 1
+        elif hit not in found:
+            found.append(hit)
+    return found
+
+
+def _share_sanity_flags(
+    note: str, sa_pool: list[str], sa_shares: list[SAShare]
+) -> list[str]:
+    """Cross-check the detected shares against what the note plainly says, so
+    a parser gap surfaces in Review instead of silently paying the wrong SA.
+
+    Flags when a staff name written in the note received no share, and when
+    the note carries two or more percentages but only one party was credited.
+    """
+    flags: list[str] = []
+    credited = {s.name for s in sa_shares}
+    if credited == {HOUSE_ACCOUNT}:
+        return flags  # company sale: staff names in the note are informational
+    missing = [n for n in _names_mentioned(note, sa_pool) if n not in credited]
+    if missing and sa_shares:
+        flags.append(
+            "Note names " + ", ".join(missing) + " but they received no share — "
+            "confirm the split"
+        )
+    pcts = [int(x) for x in re.findall(r"(\d{1,3})\s*%", note) if 0 < int(x) <= 100]
+    if len(pcts) >= 2 and len(sa_shares) < 2:
+        flags.append(
+            "Note shows a percentage split but only one party was credited — "
+            "confirm the split"
+        )
+    return flags
+
+
 def _classify_senangpay(line: str) -> PaymentMethod:
     """Heuristic: classify SenangPay line as card vs FPX. Default: card."""
     upper = line.upper()
@@ -739,6 +789,9 @@ def parse_seller_note(
             flags.append(
                 f"Deposit line has no payment method — confirm in Review: '{line.strip()}'"
             )
+
+    # ---- Self-check: does the share list agree with the note? -------------
+    flags.extend(_share_sanity_flags(upper_note, sa_pool, sa_shares))
 
     return ParsedNote(
         sa_shares=sa_shares,
