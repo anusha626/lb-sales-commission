@@ -700,3 +700,19 @@ def test_deposit_kept_when_amounts_already_reconcile():
         (PaymentMethod.VISA_CREDIT, 4990.0),
     ]
     assert not any("differs from order total" in f for f in p.review_flags)
+
+
+def test_multi_word_sa_name_detected():
+    """A name made of several words ("TAN WEN WEN") must be matched as a
+    whole; splitting it into single words leaves no fragment that clears
+    the fuzzy threshold and the order is flagged "No SA detected"."""
+    pool = ["EILEEN", "MICHELLE", "TAN WEN WEN"]
+    parsed = parse_seller_note(
+        "TAN WEN WEN\nWALK IN PG\nMYDEBIT RM12980", 12980.0, sa_list=pool
+    )
+    assert [(s.name, s.share) for s in parsed.sa_shares] == [("TAN WEN WEN", 1.0)]
+    assert "No SA detected in note" not in parsed.review_flags
+
+    # Still found with an outlet tag typed in front of the name.
+    parsed = parse_seller_note("PG TAN WEN WEN\nCASH RM100", 100.0, sa_list=pool)
+    assert [s.name for s in parsed.sa_shares] == ["TAN WEN WEN"]

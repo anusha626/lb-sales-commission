@@ -417,18 +417,28 @@ def _detect_single_sa(note: str, sa_pool: list[str]) -> SAShare | None:
         if any(fuzz.ratio("COMPANY", w) >= 82 for w in words) and "SALE" in line:
             return SAShare(name=HOUSE_ACCOUNT, share=1.0)
 
-    # Check the first 3 lines for an SA token (SA name is conventionally first)
+    # Check the first 3 lines for an SA name (conventionally first). Names can
+    # be several words ("TAN WEN WEN"), so try every contiguous run of words,
+    # longest first, before falling back to single words — otherwise a
+    # multi-word name is split into fragments that never clear the threshold.
+    max_words = max((len(n.split()) for n in sa_pool), default=1)
     for line in lines[:3]:
-        for raw_token in re.split(r"[\s,/&\-]+", line):
-            token = raw_token.strip().strip(":.;-")
-            if len(token) < 2:
-                continue
-            match = process.extractOne(token, sa_pool, scorer=fuzz.ratio)
-            if match is None:
-                continue
-            canonical, score, _ = match
-            if score >= SA_FUZZY_THRESHOLD:
-                return SAShare(name=canonical, share=1.0)
+        words = [
+            w.strip().strip(":.;-")
+            for w in re.split(r"[\s,/&\-]+", line)
+            if w.strip().strip(":.;-")
+        ]
+        for width in range(min(max_words, len(words)), 0, -1):
+            for start in range(0, len(words) - width + 1):
+                token = " ".join(words[start : start + width])
+                if len(token) < 2:
+                    continue
+                match = process.extractOne(token, sa_pool, scorer=fuzz.ratio)
+                if match is None:
+                    continue
+                canonical, score, _ = match
+                if score >= SA_FUZZY_THRESHOLD:
+                    return SAShare(name=canonical, share=1.0)
     return None
 
 
