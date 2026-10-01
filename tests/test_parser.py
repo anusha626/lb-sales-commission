@@ -716,3 +716,49 @@ def test_multi_word_sa_name_detected():
     # Still found with an outlet tag typed in front of the name.
     parsed = parse_seller_note("PG TAN WEN WEN\nCASH RM100", 100.0, sa_list=pool)
     assert [s.name for s in parsed.sa_shares] == ["TAN WEN WEN"]
+
+
+def test_multi_word_sa_name_in_percentage_split():
+    """"CHRISTY 70% TAN WEN WEN 30%" is a 70/30 split, not one SA at 100%.
+    The split regex used to capture at most two words before the number, so
+    the second party was read as "WEN WEN" and the split was discarded."""
+    pool = ["CHRISTY", "MICHELLE", "TAN WEN WEN"]
+    parsed = parse_seller_note(
+        "CHRISTY 70% TAN WEN WEN 30%\nWHATSAPP VISA CREDIT 7511 RM10800",
+        10800.0,
+        sa_list=pool,
+    )
+    assert [(s.name, s.share) for s in parsed.sa_shares] == [
+        ("CHRISTY", 0.7),
+        ("TAN WEN WEN", 0.3),
+    ]
+
+    # Multi-word name first, and with a channel word typed in front of it.
+    parsed = parse_seller_note(
+        "WHATSAPP TAN WEN WEN 60% MICHELLE 40%\nCASH RM100", 100.0, sa_list=pool
+    )
+    assert [(s.name, s.share) for s in parsed.sa_shares] == [
+        ("TAN WEN WEN", 0.6),
+        ("MICHELLE", 0.4),
+    ]
+
+
+def test_multi_word_sa_name_in_amount_split():
+    pool = ["CHRISTY", "TAN WEN WEN"]
+    parsed = parse_seller_note(
+        "CHRISTY RM7000 TAN WEN WEN RM3000\nCASH RM10000", 10000.0, sa_list=pool
+    )
+    assert [(s.name, s.share) for s in parsed.sa_shares] == [
+        ("CHRISTY", 0.7),
+        ("TAN WEN WEN", 0.3),
+    ]
+    # Sectioned form: each name starts a block with its own amounts later.
+    parsed = parse_seller_note(
+        "TAN WEN WEN WALK IN PG CASH RM7000 CHRISTY ONLINE TRANSFER RM3000",
+        10000.0,
+        sa_list=pool,
+    )
+    assert [(s.name, s.share) for s in parsed.sa_shares] == [
+        ("TAN WEN WEN", 0.7),
+        ("CHRISTY", 0.3),
+    ]

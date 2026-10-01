@@ -93,15 +93,18 @@ _FOUR_DIGIT_RE = re.compile(r"\b(\d{4})\b")
 # and the parties' shares total ~100% (all guarded in _detect_split_shares).
 # The name is captured as up to TWO words so an SA name typed with a stray space
 # ("MIN KEI 40%") or the house account ("COMPANY SALES 50") is matched as a whole.
+# Up to four words may precede the number so a multi-word name ("TAN WEN WEN
+# 30%") is captured whole; _best_sa_match then picks the sub-span that is the
+# name, so a leading channel/outlet word does no harm.
 _SPLIT_RE = re.compile(
-    r"([A-Z]+(?:\s+[A-Z]+)?)\s*(\d{1,3})\s*%?",
+    r"([A-Z]+(?:\s+[A-Z]+){0,3})\s*(\d{1,3})\s*%?",
     re.IGNORECASE,
 )
 # Amount-split notation: each SA followed by their sales amount in RM, e.g.
 # "CHLOE RM1350 MINKEI RM5050". Each SA's share is amount / sum(amounts). The
 # second word is only taken when it isn't the "RM<amount>" itself.
 _AMOUNT_SHARE_RE = re.compile(
-    r"([A-Z]+(?:\s+(?!RM\d)[A-Z]+)?)\s*RM\s?([\d,]+(?:\.\d+)?)",
+    r"([A-Z]+(?:\s+(?!RM\d)[A-Z]+){0,3})\s*RM\s?([\d,]+(?:\.\d+)?)",
     re.IGNORECASE,
 )
 # Tokens that may sit before an "RM<amount>" but are never an SA name —
@@ -213,14 +216,19 @@ def _best_sa_match(token: str, sa_pool: list[str]) -> str | None:
     typed as two words ('MIN KEI' -> 'MINKEI') and a stray channel/location
     word captured in front of it ('PJ SHASHA' -> 'SHASHA').
 
-    Tries the token as written, with internal spaces removed, and just its
-    last word, returning the best match at or above the fuzzy threshold.
+    Tries every contiguous run of words in the token (longest first, each
+    with and without its internal spaces), so a multi-word name ("TAN WEN
+    WEN") matches whole and a stray word in front of it ("PG TAN WEN WEN")
+    is ignored. Returns the best match at or above the fuzzy threshold.
     """
-    token = token.strip()
-    variants = {token, token.replace(" ", "")}
     parts = token.split()
-    if parts:
-        variants.add(parts[-1])
+    variants: list[str] = []
+    for width in range(len(parts), 0, -1):
+        for start in range(0, len(parts) - width + 1):
+            span = " ".join(parts[start : start + width])
+            variants.append(span)
+            if " " in span:
+                variants.append(span.replace(" ", ""))
     pool = sa_pool + [HOUSE_ACCOUNT]
     best_name: str | None = None
     best_score = 0.0
@@ -352,18 +360,39 @@ def _detect_positional_amount_shares(
     # "COMPANY" (or "TIKTOK") anchors the house account, so an order split
     # between an SA and COMPANY SALES ("ANNABELL ... RM10790 COMPANY SALES
     # RM490") attributes each amount to the right party.
+    # A name may span several words ("TAN WEN WEN"), so try runs of adjacent
+    # words longest first and skip the words a match consumed.
     name_hits: list[tuple[int, str]] = []
-    for m in re.finditer(r"[A-Z]{2,}", upper):
-        tok = m.group(0)
-        # "COMPANY"/"HOUSE" anchor the house account here. NOT "TIKTOK" — in an
-        # amount split it is usually a channel marker ("LILY TIKTOK/WHATSAP ...")
-        # rather than a party. (Percentage splits handle "TIKTOK 70%" separately.)
-        if fuzz.ratio(tok, "COMPANY") >= 82 or tok == "HOUSE":
-            canonical = HOUSE_ACCOUNT
-        else:
-            canonical = _best_sa_match(tok, sa_pool)
-        if canonical is not None:
-            name_hits.append((m.start(), canonical))
+    words = [(m.start(), m.group(0)) for m in re.finditer(r"[A-Z]{2,}", upper)]
+    max_words = max((len(n.split()) for n in sa_pool), default=1)
+    i = 0
+    while i < len(words):
+        matched = False
+        for width in range(min(max_words, len(words) - i), 0, -1):
+            run = words[i : i + width]
+            # Only join words that sit next to each other (whitespace between).
+            if any(
+                not upper[run[k][0] + len(run[k][1]) : run[k + 1][0]].isspace()
+                for k in range(width - 1)
+            ):
+                continue
+            tok = " ".join(w for _, w in run)
+            # "COMPANY"/"HOUSE" anchor the house account here. NOT "TIKTOK" — in
+            # an amount split it is usually a channel marker ("LILY TIKTOK/
+            # WHATSAP ...") rather than a party. (Percentage splits handle
+            # "TIKTOK 70%" separately.)
+            if width == 1 and (fuzz.ratio(tok, "COMPANY") >= 82 or tok == "HOUSE"):
+                canonical = HOUSE_ACCOUNT
+            else:
+                m = process.extractOne(tok, sa_pool, scorer=fuzz.ratio)
+                canonical = m[0] if m and m[1] >= SA_FUZZY_THRESHOLD else None
+            if canonical is not None:
+                name_hits.append((run[0][0], canonical))
+                i += width
+                matched = True
+                break
+        if not matched:
+            i += 1
     if len({n for _, n in name_hits}) < 2:
         return None  # need at least two different SAs named
 
