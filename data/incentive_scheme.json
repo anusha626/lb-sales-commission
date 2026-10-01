@@ -13,6 +13,7 @@
   "sales_basis": "gross",
   "returning_scope": "same_sa",
   "returning_count": "distinct",
+  "service_counts_from": "2026-10",
   "service_keywords": [
     "SPA",
     "POLISH",
@@ -26,6 +27,9 @@
     "HARDWARE PLATING",
     "AUTHENTICATION"
   ],
+  "discipline_bonus_amount": 100.0,
+  "discipline_bonus_max_rate_pct": 10.0,
+  "discipline_bonus_min_orders": 50,
   "months": [
     {
       "m": 1,

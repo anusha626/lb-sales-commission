@@ -13,6 +13,7 @@ from commission.incentive import (
     compute_incentives,
     customer_key,
     hash_identity,
+    is_service_only,
     month_figures_for,
     qualifying_amount,
     seed_prior_customers,
@@ -33,6 +34,10 @@ def make_scheme(**kw) -> IncentiveScheme:
         discount_scope="all_orders",
         sales_basis="gross",
         returning_scope="same_sa",
+        service_counts_from="2026-10",
+        discipline_bonus_amount=100.0,
+        discipline_bonus_max_rate_pct=10.0,
+        discipline_bonus_min_orders=50,
         service_keywords=["SPA", "POLISH", "SERVICE"],
         months=[
             IncentiveMonth(
@@ -219,15 +224,16 @@ def test_seeding_only_uses_pre_scheme_orders():
 
 # --- payout ---------------------------------------------------------------
 
-def _big(sa="MINKEI", n=30, when="2026-09-05", gp=0.5, discounted=0):
-    """n orders of RM10,000 at the given gross margin; the first `discounted`
-    of them carry a discount."""
+def _big(sa="MINKEI", n=30, when="2026-09-05", gp=0.5, discounted=0,
+         gross=10000.0):
+    """n orders at the given gross margin; the first `discounted` of them
+    carry a discount."""
     return [
         make_order(
-            f"#{i}", gross=10000.0, sa=sa, when=when, email=f"c{i}@x.com",
+            f"#{i}", gross=gross, sa=sa, when=when, email=f"c{i}@x.com",
             discount=50.0 if i < discounted else 0.0,
-            items=[LineItem(sku=f"S{i}", name="BAG", price=10000.0, qty=1,
-                            cost=10000.0 * (1 - gp))],
+            items=[LineItem(sku=f"S{i}", name="BAG", price=gross, qty=1,
+                            cost=gross * (1 - gp))],
         )
         for i in range(n)
     ]
@@ -245,6 +251,8 @@ def test_part_b_only_pays_one_times_base():
     r = rep.sa_results[0]
     assert r.accum_sales == pytest.approx(280000.0)
     assert r.part_b_hit and not r.part_a_hit
+    # 28 orders is under the 50-order floor, so no discipline bonus
+    assert r.discipline_bonus == 0.0
     assert r.payout == 200.0
 
 
@@ -607,3 +615,139 @@ def test_service_only_still_excluded_with_no_minimum():
                      items=[LineItem(sku="V", name="893808 polish service",
                                      price=190.0, qty=1, cost=10.0)])
     assert month_figures_for([spa], scheme, IncentiveHistory(), "2026-09") == {}
+
+
+# --- service revenue now counts ---------------------------------------------
+
+def test_service_revenue_counts_from_october():
+    """From M2 (OCT 2026) a service line is just part of the sale."""
+    scheme = make_scheme(service_counts_from="2026-10")
+    order = make_order(gross=5000.0, when="2026-10-05", items=[
+        LineItem(sku="B1", name="PREOWNED BAG", price=4800.0, qty=1, cost=2000.0),
+        LineItem(sku="SV", name="893808 polish service", price=200.0, qty=1, cost=50.0),
+    ])
+    q = qualifying_amount(order, scheme, "2026-10")
+    assert q["service"] == 0.0                     # nothing stripped out
+    assert q["sales"] == pytest.approx(5000.0)     # the full order counts
+
+
+def test_service_revenue_is_still_stripped_in_september():
+    """M1 keeps the original carve-out."""
+    scheme = make_scheme(service_counts_from="2026-10")
+    order = make_order(gross=5000.0, when="2026-09-05", items=[
+        LineItem(sku="B1", name="PREOWNED BAG", price=4800.0, qty=1, cost=2000.0),
+        LineItem(sku="SV", name="893808 polish service", price=200.0, qty=1, cost=50.0),
+    ])
+    q = qualifying_amount(order, scheme, "2026-09")
+    assert q["service"] == pytest.approx(200.0)
+    assert q["sales"] == pytest.approx(4800.0)
+
+
+def test_service_only_order_counts_as_a_sale_and_a_customer_from_october():
+    scheme = make_scheme(service_counts_from="2026-10")
+    hist = IncentiveHistory(prior_customers={"MINKEI": [hash_identity("e:a@b.com")]})
+    spa = make_order("#v", gross=1500.0, when="2026-10-05", items=[
+        LineItem(sku="V", name="BAG SPA DELUXE", price=1500.0, qty=1, cost=100.0)])
+    assert is_service_only(spa, scheme, "2026-10") is False
+    f = month_figures_for([spa], scheme, hist, "2026-10")["MINKEI"]
+    assert f.qualifying_sales == pytest.approx(1500.0)
+    assert f.returning == [hash_identity("e:a@b.com")]
+
+
+def test_service_only_order_counts_nobody_in_september():
+    scheme = make_scheme(service_counts_from="2026-10")
+    hist = IncentiveHistory(prior_customers={"MINKEI": [hash_identity("e:a@b.com")]})
+    spa = make_order("#v", gross=1500.0, when="2026-09-05", items=[
+        LineItem(sku="V", name="BAG SPA DELUXE", price=1500.0, qty=1, cost=100.0)])
+    assert is_service_only(spa, scheme, "2026-09") is True
+    assert month_figures_for([spa], scheme, hist, "2026-09") == {}
+
+
+def test_the_cutoff_is_on_the_payout_month_not_the_order_date():
+    """An August order settled in October is judged by October's rule."""
+    scheme = make_scheme(service_counts_from="2026-10")
+    spa = make_order("#v", gross=1500.0, when="2026-08-20", items=[
+        LineItem(sku="V", name="BAG SPA DELUXE", price=1500.0, qty=1, cost=100.0)])
+    assert is_service_only(spa, scheme, "2026-10") is False
+    assert is_service_only(spa, scheme, "2026-09") is True
+
+
+def test_empty_cutoff_makes_service_count_always():
+    scheme = make_scheme(service_counts_from="")
+    spa = make_order("#v", gross=1500.0, when="2026-09-05", items=[
+        LineItem(sku="V", name="BAG SPA DELUXE", price=1500.0, qty=1, cost=100.0)])
+    assert is_service_only(spa, scheme, "2026-09") is False
+
+
+# --- the RM100 discipline bonus ----------------------------------------------
+
+def _hit_part_a(n=12):
+    return IncentiveHistory(
+        prior_customers={"MINKEI": [hash_identity(f"e:c{i}@x.com") for i in range(n)]}
+    )
+
+
+def test_clean_month_with_a_part_earns_the_bonus():
+    """56 orders, 4 discounted (7%), both parts hit -> base + RM100."""
+    scheme = make_scheme()
+    r = compute_incentives(
+        _big(n=56, discounted=4), scheme, _hit_part_a(), "2026-09"
+    ).sa_results[0]
+    assert r.part_a_hit and r.part_b_hit
+    assert r.discount_rate_pct == pytest.approx(7.14, abs=0.01)
+    assert r.discipline_bonus == 100.0
+    assert r.payout == 500.0          # 2 x RM200 base + RM100
+
+
+def test_bonus_needs_the_fifty_order_floor():
+    """Same spotless rate, but only 28 orders — too small a sample to reward."""
+    scheme = make_scheme()
+    r = compute_incentives(
+        _big(n=28, discounted=0), scheme, _hit_part_a(), "2026-09"
+    ).sa_results[0]
+    assert r.part_a_hit and r.discount_rate_pct == 0.0
+    assert r.discipline_bonus == 0.0
+    assert r.payout == 400.0          # both parts, no bonus
+
+
+def test_bonus_is_not_paid_when_no_part_was_earned():
+    """A spotless discount rate alone pays nothing, however many orders."""
+    scheme = make_scheme()
+    r = compute_incentives(
+        _big(n=60, gross=100.0, discounted=0), scheme, IncentiveHistory(), "2026-09"
+    ).sa_results[0]
+    assert not r.part_a_hit and not r.part_b_hit
+    assert r.discount_rate_pct == 0.0
+    assert r.discipline_bonus == 0.0 and r.payout == 0.0
+
+
+def test_bonus_is_lost_just_over_the_ceiling():
+    """6 of 50 = 12%, over 10% — the parts still pay, the bonus does not."""
+    scheme = make_scheme()
+    r = compute_incentives(
+        _big(n=50, discounted=6), scheme, _hit_part_a(), "2026-09"
+    ).sa_results[0]
+    assert r.discount_rate_pct == pytest.approx(12.0)
+    assert r.discipline_bonus == 0.0
+    assert r.payout == 400.0
+
+
+def test_bonus_paid_exactly_on_the_ceiling():
+    """5 of 50 = exactly 10% — the rule is 'at or under'."""
+    scheme = make_scheme()
+    r = compute_incentives(
+        _big(n=50, discounted=5), scheme, _hit_part_a(), "2026-09"
+    ).sa_results[0]
+    assert r.discount_rate_pct == pytest.approx(10.0)
+    assert r.discipline_bonus == 100.0
+
+
+def test_bonus_rides_on_part_a_alone():
+    """Part B missed on sales, Part A hit, clean 50-order month -> base + RM100."""
+    scheme = make_scheme()
+    r = compute_incentives(
+        _big(n=50, gross=5000.0, discounted=0), scheme, _hit_part_a(), "2026-09"
+    ).sa_results[0]
+    assert r.accum_sales == pytest.approx(250000.0)   # under the RM280k target
+    assert r.part_a_hit and not r.part_b_hit
+    assert r.payout == 300.0          # RM200 base + RM100 bonus

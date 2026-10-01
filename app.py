@@ -1527,6 +1527,8 @@ def page_incentive() -> None:
                     )
                 )
             c4.metric("Incentive", fmt_money(r.payout))
+            if r.discipline_bonus_earned:
+                c4.caption(f"incl. {fmt_money(r.discipline_bonus)} bonus")
 
             gap_sales = max(0.0, r.sales_target - r.accum_sales)
             gap_ret = max(0, r.returning_target - r.accum_returning)
@@ -1537,6 +1539,27 @@ def page_incentive() -> None:
                 bits.append(f"**{fmt_money(gap_sales)}** more sales for Part B")
             if bits:
                 st.caption("Still needed: " + " · ".join(bits) + ".")
+            if r.discipline_bonus_earned:
+                st.caption(
+                    f"🏅 Discipline bonus **{fmt_money(r.discipline_bonus)}** — "
+                    f"discount rate {r.discount_rate_pct:.0f}% is at or under "
+                    f"{r.discipline_bonus_max_rate_pct:.0f}% across "
+                    f"{r.discount_denominator} orders, and a part was earned."
+                )
+            elif (
+                scheme.discipline_bonus_amount
+                and r.discount_denominator
+                and r.discount_rate_pct <= r.discipline_bonus_max_rate_pct
+                and not (r.part_a_hit or r.part_b_hit)
+            ):
+                st.caption(
+                    f"🏅 Discount rate {r.discount_rate_pct:.0f}% is inside the "
+                    f"{r.discipline_bonus_max_rate_pct:.0f}% bonus band, but the "
+                    f"{fmt_money(scheme.discipline_bonus_amount)} bonus also needs "
+                    f"Part A or Part B earned and at least "
+                    f"{r.discipline_bonus_min_orders} orders "
+                    f"({r.month_discount_base_orders} this month)."
+                )
             if r.excluded_note:
                 st.caption(f"⚠️ {r.excluded_note}")
 
@@ -1585,6 +1608,7 @@ def page_incentive() -> None:
             "Part A": "Yes" if r.part_a_hit else "No",
             "Part B": "Yes" if r.part_b_hit else "No",
             "Base": r.base_incentive,
+            "Bonus": r.discipline_bonus,
             "Incentive": r.payout,
         }
         for r in report.sa_results
@@ -1602,6 +1626,7 @@ def page_incentive() -> None:
             "GP %": st.column_config.NumberColumn(format="%.1f%%"),
             "Discount rate %": st.column_config.NumberColumn(format="%.0f%%"),
             "Base": st.column_config.NumberColumn(format="RM %.2f"),
+            "Bonus": st.column_config.NumberColumn(format="RM %.2f"),
             "Incentive": st.column_config.NumberColumn(format="RM %.2f"),
         },
     )
@@ -2078,6 +2103,33 @@ def page_settings() -> None:
                  "the stricter target.",
         )
 
+        b1, b2, b3 = st.columns(3)
+        bonus_amount = b1.number_input(
+            "Discipline bonus (RM)",
+            value=float(scheme.discipline_bonus_amount),
+            step=50.0, min_value=0.0, key="inc_bonusamt",
+            help="Flat extra for a clean discount month. 0 disables it.",
+        )
+        bonus_ceiling = b2.number_input(
+            "Bonus paid at or under (% of orders discounted)",
+            value=float(scheme.discipline_bonus_max_rate_pct),
+            step=1.0, min_value=0.0, max_value=100.0, key="inc_bonusrate",
+        )
+        bonus_min_orders = b2.number_input(
+            "Minimum orders in the month for the bonus",
+            value=int(scheme.discipline_bonus_min_orders),
+            step=5, min_value=0, key="inc_bonusminord",
+            help="Stops a handful of undiscounted orders reading as perfect "
+                 "discipline.",
+        )
+        service_from = b3.text_input(
+            "Service revenue counts from (YYYY-MM)",
+            value=scheme.service_counts_from,
+            key="inc_servicefrom",
+            help="Payout months before this keep the old carve-out, so M1 "
+                 "(SEP 2026) excludes service. Blank = service always counts.",
+        )
+
         service_kw = st.text_area(
             "Service keywords (one per line) — matching line items are stripped "
             "out of qualifying sales, and a service-only order counts nobody as "
@@ -2144,6 +2196,10 @@ def page_settings() -> None:
             if not re.fullmatch(r"\d{4}-\d{2}", start_month.strip()):
                 st.error("Start month must be YYYY-MM.")
                 bad = True
+            sf = service_from.strip()
+            if sf and not re.fullmatch(r"\d{4}-\d{2}", sf):
+                st.error("Service-from month must be YYYY-MM, or blank.")
+                bad = True
             if not bad:
                 scheme.start_month = start_month.strip()
                 scheme.min_order_value = float(min_order)
@@ -2156,6 +2212,10 @@ def page_settings() -> None:
                 scheme.sales_basis = sales_basis
                 scheme.returning_scope = returning_scope
                 scheme.returning_count = returning_count
+                scheme.discipline_bonus_amount = float(bonus_amount)
+                scheme.discipline_bonus_max_rate_pct = float(bonus_ceiling)
+                scheme.discipline_bonus_min_orders = int(bonus_min_orders)
+                scheme.service_counts_from = sf
                 scheme.service_keywords = [
                     k.strip() for k in service_kw.splitlines() if k.strip()
                 ]
