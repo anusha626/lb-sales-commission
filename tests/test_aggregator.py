@@ -261,3 +261,21 @@ def test_store_credit_deducted_from_gross():
     ])
     o = build_order_results(df, settings)[0]
     assert o.gross_total == 1960.10
+
+
+def test_carried_deposit_credit_counts_in_full():
+    """#10688: a RM1,000 deposit from a dropped bag is carried over as store
+    credit and the note lists it as "DEPOSIT ONLINE TRANSFER RM1000". That was
+    real money paid to LB, so the gross is the full RM6,690, the deposit keeps
+    its own (0%) transfer rate and only the RM5,690 Visa portion is charged."""
+    settings = load_all()
+    df = _df([
+        _row(**{"Order Number": "#DEP", "Total Amount": "6690.00",
+                "Credit Used": "-1000.00",
+                "Note": "CHRISTY CHATDADDY DEPOSIT ONLINE TRANSFER RM1000 "
+                        "BALANCE VISA CREDIT 2539 RM5690"}),
+    ])
+    o = build_order_results(df, settings)[0]
+    assert o.gross_total == 6690.0
+    assert sorted(p.amount for p in o.parsed.payments) == [1000.0, 5690.0]
+    assert not any("differs from order total" in f for f in o.parsed.review_flags)

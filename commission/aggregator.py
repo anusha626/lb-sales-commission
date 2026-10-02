@@ -202,6 +202,23 @@ def _aggregate_rows(
     return out
 
 
+_NOTE_AMOUNT_RE = re.compile(r"RM\s?([\d,]+(?:\.\d+)?)", re.IGNORECASE)
+
+
+def _note_carries_deposit(note: str, credit_used: float) -> bool:
+    """True when a DEPOSIT/DEPO line in the note names the store-credit amount,
+    i.e. the credit is a carried-over deposit rather than refund credit."""
+    # Notes are often one run-on line; split before BALANCE so the balance
+    # amount isn't read as part of the deposit.
+    for line in re.split(r"[\r\n]+|(?=\bBAL)", note.upper()):
+        if not re.search(r"\bDEPO", line):
+            continue
+        for amt in _NOTE_AMOUNT_RE.findall(line):
+            if abs(float(amt.replace(",", "")) - credit_used) <= 1.0:
+                return True
+    return False
+
+
 def _parse_total(s: str) -> float:
     try:
         return float(s.replace(",", "").strip()) if s else 0.0
@@ -321,6 +338,14 @@ def build_order_results(
         # Amount does NOT subtract it, so we do. (Point/voucher credits are not
         # deducted here — only store credit.)
         credit_used = abs(_parse_total(row.get("Credit Used", "") or "0"))
+        # Exception: a deposit the customer paid on a bag she later dropped is
+        # never refunded — it is carried over as store credit to this order and
+        # the SA writes it into the note as "DEPOSIT … RM1000". That money was
+        # really paid to LB for this sale, so it counts in full (#10688: the
+        # RM6,690 bag, not RM5,690). The deposit line then stays a normal
+        # payment so its own method/charge rate applies.
+        if credit_used and _note_carries_deposit(note_text, credit_used):
+            credit_used = 0.0
         if credit_used:
             gross = round(max(0.0, gross - credit_used), 2)
         # Clearance = the larger of the note tag ("SALES JUNE …") and the
