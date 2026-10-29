@@ -529,6 +529,34 @@ def _classify_senangpay(line: str) -> PaymentMethod:
     return PaymentMethod.SENANGPAY_CARD
 
 
+# Names staff write in notes that are not SA-list names. ELISH's sales are
+# company sales; "WENWEN" / "WEN WEN" / a bare "TAN" are TAN WEN WEN. Only whole
+# words: "ELISH-ZDD-260824-A" is a trade-in item code, not a seller.
+_ELISH_RE = re.compile(r"\bELISH\b(?!-)")
+_WENWEN_RE = re.compile(r"(?<!TAN )\bWEN ?WEN\b|\bTAN\b(?! ?WEN)")
+# "KEYED IN BY RISKA": who typed the order in, not who sold it.
+_KEYED_IN_RE = re.compile(r"\bKEY(?:ED)? IN BY\b[^\n]*")
+
+
+# Overpayment the customer keeps as store credit ("BALANCE PUT AS CREDIT",
+# "CHANGE TO CREDIT", "KEEP AS STORE CREDIT").
+_CREDIT_OUT_RE = re.compile(
+    r"\b(?:PUT|PUTS|CHANGE|CHANGED|KEEP|KEPT|CONVERT(?:ED)?|MOVE(?:D)?)\s+"
+    r"(?:AS|TO|INTO|IN)\s+(?:STORE\s+)?CREDIT\b"
+)
+
+
+def _apply_name_aliases(upper_note: str) -> str:
+    if _ELISH_RE.search(upper_note):
+        if HOUSE_ACCOUNT in upper_note:
+            # "COMPANY SALES (ELISH)" / "ELISH COMPANY SALES": already house.
+            upper_note = _ELISH_RE.sub("", upper_note)
+        else:
+            upper_note = _ELISH_RE.sub(HOUSE_ACCOUNT, upper_note)
+    upper_note = _KEYED_IN_RE.sub("", upper_note)
+    return _WENWEN_RE.sub("TAN WEN WEN", upper_note)
+
+
 def parse_seller_note(
     note: str,
     order_total: float,
@@ -578,7 +606,9 @@ def parse_seller_note(
     # ---- Normalise --------------------------------------------------------
     # Full-width punctuation from phone / CJK keyboards: fold to ASCII so
     # "MINKEI 70％ RISKA 30％" is read as a 70/30 split, not one SA at 100%.
-    upper_note = raw.upper().translate(str.maketrans("％＋，．", "%+,."))
+    upper_note = _apply_name_aliases(
+        raw.upper().translate(str.maketrans("％＋，．", "%+,."))
+    )
     lines = [ln.strip() for ln in upper_note.split("\n") if ln.strip()]
 
     # ---- SA shares --------------------------------------------------------
@@ -707,6 +737,27 @@ def parse_seller_note(
         flags.append(
             f"{len(implicit_idx)} payment lines have no amount; cannot auto-allocate"
         )
+
+    # ---- Overpayment kept as store credit ---------------------------------
+    # "ONLINE TRANSFER RM5000 / ONLINE TRANSFER RM4540 / MEMBER POINTS RM132.50
+    # / BALANCE PUT AS CREDIT RM1,132.50" on an RM8,540 order: the customer
+    # overpaid RM1,000, and that plus the points went to store credit. The sale
+    # is still the order total — trim the excess off the last paid portion
+    # instead of flagging a mismatch. Only the credit-OUT wording counts;
+    # "CREDIT BALANCE RM500" is the customer spending credit, not keeping it.
+    credit_out = _CREDIT_OUT_RE.search(upper_note)
+    if credit_out and payments and all(p.amount is not None for p in payments):
+        overpay = round(sum(p.amount for p in payments) - order_total, 2)
+        tail = upper_note[credit_out.end():]
+        credit_amts = [float(m.replace(",", "")) for m in _AMOUNT_RE.findall(tail)]
+        within_credit = not credit_amts or overpay <= max(credit_amts) + 1.0
+        if overpay > 1.0 and within_credit:
+            for i in range(len(payments) - 1, -1, -1):
+                if payments[i].amount > overpay:
+                    payments[i] = payments[i].model_copy(
+                        update={"amount": round(payments[i].amount - overpay, 2)}
+                    )
+                    break
 
     # Align parsed amounts to the order total. The seller note is human-typed
     # and prone to typos (e.g. "CASH RM750" written when the order was RM950);

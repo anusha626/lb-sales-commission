@@ -785,3 +785,48 @@ def test_self_check_flags_shares_that_disagree_with_note():
     ) == []
     # Already flagged as no-SA: don't pile on a second flag.
     assert _share_sanity_flags("TAN WEN WEN\nCASH RM100", pool, []) == []
+
+
+def test_name_aliases_elish_wenwen_and_keyed_in():
+    pool = ["CHRISTY", "MINKEI", "RISKA", "TAN WEN WEN"]
+    # ELISH sells as the company.
+    p = parse_seller_note("ELISH\nWHATSAPP\nONLINE TRANSFER RM8800", 8800, pool)
+    assert _names(p) == [(HOUSE_ACCOUNT, 1.0)] and not p.review_flags
+    p = parse_seller_note(
+        "ELISH 60% MINKEI 40%\nWHATSAPP\nDEPOSIT ONLINE TRANSFER RM400\n"
+        "BALANCE VISA CREDIT 3099 RM5400", 5800, pool,
+    )
+    assert _names(p) == [(HOUSE_ACCOUNT, 0.6), ("MINKEI", 0.4)] and not p.review_flags
+    p = parse_seller_note("COMPANY SALES (ELISH)\nWHATSAPP\nONLINE TRANSFER 0150 RM690", 690, pool)
+    assert _names(p) == [(HOUSE_ACCOUNT, 1.0)]
+    # "Elish-ZDD-..." is a trade-in item code, not a seller.
+    p = parse_seller_note(
+        "CHRISTY\nWALK IN SS2\nTRADE IN RM10898\nElish-ZDD-260824-A (DIOR)", 10898, pool
+    )
+    assert _names(p) == [("CHRISTY", 1.0)]
+    # WENWEN / WEN WEN / bare TAN are TAN WEN WEN.
+    for who in ("WENWEN", "WEN WEN", "TAN", "TAN WEN WEN"):
+        p = parse_seller_note(f"{who}\nWALK IN PG\nVISA CREDIT 1946 RM3990", 3990, pool)
+        assert _names(p) == [("TAN WEN WEN", 1.0)], who
+    # Whoever keyed the order in is not the seller.
+    p = parse_seller_note(
+        "WEN WEN\nWHATSAPP\nKEYED IN BY RISKA\nONLINE TRANSFER RM4140\nONLINE TRANSFER RM4009",
+        8149, pool,
+    )
+    assert _names(p) == [("TAN WEN WEN", 1.0)] and not p.review_flags
+
+
+def test_overpayment_put_as_credit_is_not_a_mismatch():
+    # #10858: RM1,000 overpaid + RM132.50 points kept as store credit.
+    note = (
+        "TAN WEN WEN\nWHATSAPP\nONLINE TRANSFER RM5000\nONLINE TRANSFER RM4540\n"
+        "MEMBER POINTS RM132.50\n\nBALANCE PUT AS CREDIT\nRM1,132.50"
+    )
+    p = parse_seller_note(note, 8540, ["TAN WEN WEN"])
+    assert [pp.amount for pp in p.payments] == [5000.0, 3540.0]
+    assert not p.review_flags
+    # "CREDIT BALANCE" is the customer spending credit — unchanged.
+    p = parse_seller_note(
+        "MINKEI\nWHATSAPP\nCREDIT BALANCE RM1000\nMASTER 8422 RM400", 1400, ["MINKEI"]
+    )
+    assert [pp.amount for pp in p.payments] == [1400.0]
