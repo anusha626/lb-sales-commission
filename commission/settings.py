@@ -71,12 +71,12 @@ class ChannelFlatRule(BaseModel):
 
 
 class ChannelSaleSplit(BaseModel):
-    """For a channel (e.g. tiktok-shop), the SA(s) named on the order share
-    `sa_fraction` of the net; the rest goes to COMPANY SALES (house). If no SA
-    is named, the whole order is house."""
+    """For a channel (e.g. tiktok-shop), the SA(s) named on the order keep the
+    shares written on the seller note. If no SA is named, the whole order is
+    house. `sa_fraction` is no longer applied to the sale."""
 
     channel: str
-    sa_fraction: float  # 0..1 — SA portion; (1 - sa_fraction) → house
+    sa_fraction: float  # kept for saved settings; not applied to the sale
     label: str = ""
 
 

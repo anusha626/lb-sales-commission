@@ -1883,10 +1883,10 @@ def page_settings() -> None:
 
         st.subheader("Channel sale-split rules")
         st.caption(
-            "Orders on these channels split the sale: the SA(s) named on the "
-            "order keep the SA % (and earn their tier rate on that portion); the "
-            "rest goes to COMPANY SALES (no commission). No SA on the note → the "
-            "whole order is company. E.g. tiktok-shop at 30% → SA 30%, company 70%."
+            "On these channels the seller note decides the split: an SA named on "
+            "its own gets 100%; a split only applies when the note states it, e.g. "
+            "CHRISTY 30% COMPANY 70%. No SA on the note → the whole order is "
+            "company. The SA % below is not applied to the sale."
         )
         split_df = pd.DataFrame(
             [

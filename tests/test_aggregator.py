@@ -144,8 +144,8 @@ def test_clearance_sku_gated_by_effective_date():
 
 
 def test_tiktok_channel_sale_split():
-    """tiktok-shop: the SA keeps 30% of the sale, 70% goes to COMPANY SALES;
-    no SA on the note → whole order is house."""
+    """tiktok-shop: the seller note decides. A named SA gets 100% unless the
+    note states a split; no SA on the note → whole order is house."""
     settings = load_all()
     if settings.tiers.sale_split_for("tiktok-shop") is None:
         import pytest
@@ -154,6 +154,11 @@ def test_tiktok_channel_sale_split():
         **{"Order Number": "#T1", "Channel": "tiktok-shop",
            "Note": "MINKEI\nTIKTOK PAYMENT RM1000", "Total Amount": "1000"})]), settings)[0]
     shares = {s.name: round(s.share, 4) for s in with_sa.parsed.sa_shares}
+    assert shares == {"MINKEI": 1.0}
+    stated = build_order_results(_df([_row(
+        **{"Order Number": "#T3", "Channel": "tiktok-shop",
+           "Note": "MINKEI 30% COMPANY 70%\nTIKTOK PAYMENT RM1000", "Total Amount": "1000"})]), settings)[0]
+    shares = {s.name: round(s.share, 4) for s in stated.parsed.sa_shares}
     assert shares == {"MINKEI": 0.3, HOUSE_ACCOUNT: 0.7}
     no_sa = build_order_results(_df([_row(
         **{"Order Number": "#T2", "Channel": "tiktok-shop",
