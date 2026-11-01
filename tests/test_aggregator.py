@@ -268,6 +268,20 @@ def test_store_credit_deducted_from_gross():
     assert o.gross_total == 1960.10
 
 
+def test_settlement_exception_only_moves_that_order():
+    """#11028 is a one-off: settled in Oct 2026 whatever its payment dates say."""
+    settings = load_all()
+    df = _df([
+        _row(**{"Order Number": "#11028", "Total Amount": "5990.00",
+                "Note": "LILY\nCASH RM5990"}),
+        _row(**{"Order Number": "#OTHER", "Total Amount": "5990.00",
+                "Note": "LILY\nCASH RM5990"}),
+    ])
+    by_num = {o.order_number: o for o in build_order_results(df, settings)}
+    assert by_num["#11028"].settlement_date.strftime("%Y-%m") == "2026-10"
+    assert by_num["#OTHER"].settlement_date != by_num["#11028"].settlement_date
+
+
 def test_credit_payment_line_counts_in_full():
     """#10963: the note lists "CREDIT RM1132.50" as a payment, so the customer
     already paid that money and the gross is the full RM9,400, not RM8,400."""

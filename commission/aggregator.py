@@ -199,6 +199,10 @@ def _aggregate_rows(
 
 _NOTE_AMOUNT_RE = re.compile(r"RM\s?([\d,]+(?:\.\d+)?)", re.IGNORECASE)
 
+# One-off payout-month exceptions, order by order. #11028: payments are dated
+# 1 Nov 2026 but it is treated as settled in Oct 2026 (special case).
+_SETTLEMENT_EXCEPTIONS = {"#11028": datetime(2026, 10, 31)}
+
 
 def _note_carries_deposit(note: str, credit_used: float) -> bool:
     """True when a DEPOSIT/DEPO line in the note names the store-credit amount,
@@ -336,6 +340,7 @@ def build_order_results(
         note_paid = _paid_month_from_note(note_text, order_date)
         if note_paid is not None:
             settlement_date = note_paid
+        settlement_date = _SETTLEMENT_EXCEPTIONS.get(order_number, settlement_date)
 
         gross = _parse_total(row["Total Amount"])
         # Store credit ("Credit Used") is money the customer already had (from a
