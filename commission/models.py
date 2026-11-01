@@ -28,6 +28,7 @@ class PaymentMethod(str, Enum):
     TIKTOK = "TIKTOK"
     TNG = "TNG"
     ALIPAY = "ALIPAY"
+    STORE_CREDIT = "STORE_CREDIT"
     UNKNOWN = "UNKNOWN"
 
 
@@ -51,6 +52,7 @@ ZERO_CHARGE_METHODS: set[PaymentMethod] = {
     PaymentMethod.TIKTOK,
     PaymentMethod.TNG,
     PaymentMethod.ALIPAY,
+    PaymentMethod.STORE_CREDIT,
 }
 
 

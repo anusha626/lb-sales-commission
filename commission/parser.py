@@ -563,6 +563,7 @@ def parse_seller_note(
     sa_list: list[str] | None = None,
     channel: str | None = None,
     credit_used: float = 0.0,
+    credit_paid: bool = False,
 ) -> ParsedNote:
     """Parse a seller note into structured SA shares + payment portions.
 
@@ -576,6 +577,9 @@ def parse_seller_note(
         credit_used: Store credit applied to the order (RM, positive). Already
             deducted from `order_total`, so a note line repeating it is not a
             payment on this sale — see the store-credit block below.
+        credit_paid: The note lists store credit as a payment and `order_total`
+            is the full price, so the balance the other lines don't cover was
+            paid with credit (and points) at no merchant charge.
 
     Returns:
         ParsedNote with sa_shares, payments, and any review_flags.
@@ -719,6 +723,19 @@ def parse_seller_note(
                     f"Treated '{dropped.raw_line}' as the RM{credit_used:.2f} store "
                     "credit already applied to this order — confirm in Review"
                 )
+
+    # #10963: RM8,260 by transfer + "CREDIT RM1132.50" + "MEMBER POINTS RM7.50"
+    # on an RM9,400 order — the RM1,140 balance is a zero-charge credit portion.
+    if credit_paid and payments and all(p.amount is not None for p in payments):
+        balance = round(order_total - sum(p.amount for p in payments), 2)
+        if balance > 0:
+            payments.append(
+                PaymentPortion(
+                    method=PaymentMethod.STORE_CREDIT,
+                    amount=balance,
+                    raw_line="CREDIT (from note)",
+                )
+            )
 
     # ---- Allocate implicit remainder & validate sum -----------------------
     explicit_sum = sum(p.amount for p in payments if p.amount is not None)

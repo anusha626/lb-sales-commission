@@ -214,6 +214,17 @@ def _note_carries_deposit(note: str, credit_used: float) -> bool:
     return False
 
 
+def _note_pays_with_credit(note: str, credit_used: float) -> bool:
+    """True when the note has its own "CREDIT RM…" payment line covering the
+    store credit. VISA/MASTERCARD CREDIT lines don't start with CREDIT, so card
+    payments never match."""
+    for line in re.split(r"[\r\n]+", note.upper()):
+        m = re.match(r"\s*CREDIT\s+RM\s?([\d,]+(?:\.\d+)?)", line)
+        if m and float(m.group(1).replace(",", "")) >= credit_used - 1.0:
+            return True
+    return False
+
+
 def _parse_total(s: str) -> float:
     try:
         return float(s.replace(",", "").strip()) if s else 0.0
@@ -339,7 +350,11 @@ def build_order_results(
         # really paid to LB for this sale, so it counts in full (#10688: the
         # RM6,690 bag, not RM5,690). The deposit line then stays a normal
         # payment so its own method/charge rate applies.
-        if credit_used and _note_carries_deposit(note_text, credit_used):
+        # Same when the SA lists the credit as a payment ("CREDIT RM1132.50"):
+        # the customer already paid that money, so the full price counts
+        # (#10963: RM9,400, not RM8,400).
+        credit_paid = bool(credit_used) and _note_pays_with_credit(note_text, credit_used)
+        if credit_paid or (credit_used and _note_carries_deposit(note_text, credit_used)):
             credit_used = 0.0
         if credit_used:
             gross = round(max(0.0, gross - credit_used), 2)
@@ -386,6 +401,7 @@ def build_order_results(
                 sa_list=sa_pool,
                 channel=channel,
                 credit_used=credit_used,
+                credit_paid=credit_paid,
             )
 
         # Channel sale-split (e.g. TikTok): the shares on the note stand.

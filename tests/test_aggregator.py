@@ -268,6 +268,35 @@ def test_store_credit_deducted_from_gross():
     assert o.gross_total == 1960.10
 
 
+def test_credit_payment_line_counts_in_full():
+    """#10963: the note lists "CREDIT RM1132.50" as a payment, so the customer
+    already paid that money and the gross is the full RM9,400, not RM8,400."""
+    settings = load_all()
+    df = _df([
+        _row(**{"Order Number": "#CRP", "Total Amount": "9400.00",
+                "Credit Used": "-1000.00",
+                "Note": "WEN WEN\nWHATSAPP\nONLINE TRANSFER MBB 9238 RM5000\n"
+                        "ONLINE TRANSFER MBB 9238 RM3260\nCREDIT RM1132.50\n"
+                        "MEMBER POINTS RM7.50"}),
+    ])
+    o = build_order_results(df, settings)[0]
+    assert o.gross_total == 9400.0
+    assert o.net_total == 9400.0
+    assert not o.parsed.review_flags
+
+
+def test_card_credit_line_does_not_count_as_store_credit():
+    """A VISA CREDIT payment line is a card, so store credit is still deducted."""
+    settings = load_all()
+    df = _df([
+        _row(**{"Order Number": "#CRV", "Total Amount": "1990.00",
+                "Credit Used": "-100.00",
+                "Note": "CHRISTY\nVISA CREDIT 2539 RM1890"}),
+    ])
+    o = build_order_results(df, settings)[0]
+    assert o.gross_total == 1890.0
+
+
 def test_carried_deposit_credit_counts_in_full():
     """#10688: a RM1,000 deposit from a dropped bag is carried over as store
     credit and the note lists it as "DEPOSIT ONLINE TRANSFER RM1000". That was
