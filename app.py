@@ -12,22 +12,12 @@ from __future__ import annotations
 import io
 import json
 import re
-import sys
 from datetime import date, datetime, timedelta
 
 import pandas as pd
 import streamlit as st
 
 from pathlib import Path
-
-# Streamlit Cloud pulls a new commit and reruns this script, but keeps the
-# commission modules it already imported, so the sidebar shows the new build
-# while the old calculation still runs. Drop them when their source changes.
-_source_stamp = max(f.stat().st_mtime for f in (Path(__file__).parent / "commission").glob("*.py"))
-_loaded_pkg = sys.modules.get("commission")
-if _loaded_pkg is not None and getattr(_loaded_pkg, "_source_stamp", None) != _source_stamp:
-    for _name in [m for m in sys.modules if m == "commission" or m.startswith("commission.")]:
-        del sys.modules[_name]
 
 from commission.aggregator import build_order_results, read_easystore_csv
 from commission.commission_engine import (
@@ -76,10 +66,8 @@ from commission.settings import (
     save_tiers,
 )
 
-sys.modules["commission"]._source_stamp = _source_stamp
-
 PROJECT_ROOT = Path(__file__).parent
-RECLASS_PATH =PROJECT_ROOT / "data" / "reclassifications.json"
+RECLASS_PATH = PROJECT_ROOT / "data" / "reclassifications.json"
 
 
 def _load_reclassifications() -> dict:
