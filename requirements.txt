@@ -1,3 +1,5 @@
+# Changing this file makes Streamlit Cloud restart the app and reload all code.
+# Last forced restart: 2026-11-01 for build with the #11028 exception.
 streamlit>=1.32
 pandas>=2.0
 openpyxl>=3.1
